@@ -539,11 +539,53 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
         const measureCanvas = document.createElement('canvas');
         const measureCtx = measureCanvas.getContext('2d');
 
+        const PAGE_NUM_PATTERNS = [
+          /^\d{1,5}$/,
+          /^\d{1,5}\.$/,
+          /^\d{1,5}\s*[-–—]\s*\d{1,5}$/,
+          /^\[.*\]$/,
+          /^[ivxlcdm]{1,10}$/i,
+          /^page\s+\d+/i,
+          /^p\.\s*\d+/i,
+          /^pag\.\s*\d+/i,
+          /^\d+\s*\/\s*\d+$/,
+        ];
+
+        const viewHeight = viewport.height;
+        const MARGIN_RATIO = 0.06;
+
+        const isPageNumber = (item, y, itemFontHeight) => {
+          const trimmed = item.str.trim();
+          if (!trimmed) return false;
+          if (trimmed.length > 20) return false;
+          if (PAGE_NUM_PATTERNS.some(p => p.test(trimmed))) {
+            const atTop = y < viewHeight * MARGIN_RATIO;
+            const atBottom = y + itemFontHeight > viewHeight * (1 - MARGIN_RATIO);
+            if (atTop || atBottom) return true;
+          }
+          if (/^\d{1,5}$/.test(trimmed)) {
+            const nearTop = y < viewHeight * 0.15;
+            const nearBottom = y + itemFontHeight > viewHeight * 0.85;
+            if (nearTop || nearBottom) {
+              const nearby = textContent.items.filter(other => {
+                if (other === item) return false;
+                const otherTx = pdfjsLib.Util.transform(viewport.transform, other.transform);
+                const otherY = otherTx[5] - Math.sqrt(otherTx[2] ** 2 + otherTx[3] ** 2);
+                return Math.abs(otherY - y) < itemFontHeight * 1.5 && other.str.trim().length > 0;
+              });
+              if (nearby.length === 0) return true;
+            }
+          }
+          return false;
+        };
+
         textContent.items.forEach(item => {
           if (!item.str.trim()) return;
           const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
           const fontHeight = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3]));
           const originalTop = tx[5] - fontHeight;
+
+          if (isPageNumber(item, originalTop, fontHeight)) return;
 
           let mappedTop = -9999;
           for (const c of chunks) {
