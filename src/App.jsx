@@ -691,15 +691,26 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
     openContextMenu(e.clientX, e.clientY);
   };
 
-  const handleTouchStart = (e) => {
-    const touch = e.touches[0];
-    pressTimer.current = setTimeout(() => {
-      openContextMenu(touch.clientX, touch.clientY);
-    }, 600);
+  const handleTouchEnd = (e) => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.bottom + 10;
+      openContextMenu(x, y);
+    }
   };
 
-  const handleTouchEnd = () => {
-    if (pressTimer.current) clearTimeout(pressTimer.current);
+  const handleTouchMove = () => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
   };
 
   return (
@@ -725,9 +736,8 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
         ref={textLayerRef} 
         className="textLayer"
         onContextMenu={handleContextMenu}
-        onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
-        onTouchMove={handleTouchEnd}
+        onTouchMove={handleTouchMove}
         style={{
           position: 'absolute',
           top: 0,

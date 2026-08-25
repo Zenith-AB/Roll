@@ -153,6 +153,8 @@
   color: transparent;
   line-height: 1;
   opacity: 1;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .textLayer span {
@@ -162,6 +164,8 @@
   transform-origin: 0% 0%;
   line-height: 1;
   white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .textLayer ::selection {
