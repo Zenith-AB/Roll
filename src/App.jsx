@@ -29,7 +29,7 @@ import { PDFDocument, rgb } from 'pdf-lib';
 import './App.css';
 
 // Set up the worker for pdfjs-dist
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.min.mjs`;
 
 const COLORS = [
   { id: 'yellow', label: 'Amarillo', css: 'rgba(255, 255, 0, 0.35)', pdf: rgb(1, 1, 0) },
@@ -56,9 +56,9 @@ function App() {
       setRawPdfBuffer(arrayBuffer.slice(0));
       const loadedPdf = await pdfjsLib.getDocument({ 
         data: arrayBuffer,
-        cMapUrl: `/cmaps/`,
+        cMapUrl: `${import.meta.env.BASE_URL}cmaps/`,
         cMapPacked: true,
-        standardFontDataUrl: `/standard_fonts/`
+        standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`
       }).promise;
       setPdf(loadedPdf);
       setNumPages(loadedPdf.numPages);
@@ -281,7 +281,7 @@ function App() {
     <div className="webtoon-container">
       {!pdf && (
         <div className="upload-section">
-          <img src="/logo.svg" alt="Rollo Logo" className="app-logo" />
+          <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="Rollo Logo" className="app-logo" />
           <h1>Rollo</h1>
           <p className="subtitle">Disfruta de la lectura vertical continua</p>
           <div 
