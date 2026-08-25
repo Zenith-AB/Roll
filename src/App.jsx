@@ -311,6 +311,8 @@ function App() {
               className="download-button" 
               onClick={handleDownload} 
               disabled={isConverting}
+              title="Descargar PDF"
+              aria-label="Descargar PDF"
             >
               <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M12 15V3M12 15L8 11M12 15L16 11M2 17L2.621 19.485C2.72915 19.9177 2.97882 20.3018 3.33033 20.5763C3.68184 20.8508 4.11501 20.9999 4.561 21H19.439C19.885 20.9999 20.3182 20.8508 20.6697 20.5763C21.0212 20.3018 21.2708 19.9177 21.379 19.485L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -448,12 +450,14 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
   const [activeNote, setActiveNote] = useState(null);
   const [chunksInfo, setChunksInfo] = useState({ chunks: [], totalHeight: 0, width: 0 });
   const pressTimer = useRef(null);
+  const touchEndTimer = useRef(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const renderScaleRef = useRef(null);
 
   useEffect(() => {
     return () => {
       if (pressTimer.current) clearTimeout(pressTimer.current);
+      if (touchEndTimer.current) clearTimeout(touchEndTimer.current);
     };
   }, []);
 
@@ -699,9 +703,10 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       clearTimeout(pressTimer.current);
       pressTimer.current = null;
     }
-    // iOS finalizes selection AFTER touchend — need longer delay
+    if (touchEndTimer.current) clearTimeout(touchEndTimer.current);
     const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-    setTimeout(() => {
+    touchEndTimer.current = setTimeout(() => {
+      touchEndTimer.current = null;
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim()) {
         const range = selection.getRangeAt(0);
@@ -717,6 +722,10 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
     if (pressTimer.current) {
       clearTimeout(pressTimer.current);
       pressTimer.current = null;
+    }
+    if (touchEndTimer.current) {
+      clearTimeout(touchEndTimer.current);
+      touchEndTimer.current = null;
     }
   };
 
