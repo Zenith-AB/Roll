@@ -699,14 +699,18 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       clearTimeout(pressTimer.current);
       pressTimer.current = null;
     }
-    const selection = window.getSelection();
-    if (selection && !selection.isCollapsed && selection.toString().trim()) {
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.bottom + 10;
-      openContextMenu(x, y);
-    }
+    // iOS finalizes selection AFTER touchend — need longer delay
+    const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) {
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.bottom + 10;
+        openContextMenu(x, y);
+      }
+    }, isIOS ? 400 : 0);
   };
 
   const handleTouchMove = () => {
@@ -753,6 +757,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
           {highlights && highlights.map((hl) => (
             <div 
               key={hl.id}
+              className="highlight-group"
               onMouseEnter={() => hl.note && setActiveNote(hl.id)}
               onMouseLeave={() => setActiveNote(null)}
             >
