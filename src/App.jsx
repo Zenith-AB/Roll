@@ -269,7 +269,7 @@ function App() {
         </div>
       )}
       {pdf && (
-        <div className="pdf-viewer-container">
+        <div className="pdf-viewer-container" style={{ alignItems: fontScale > 1 ? 'flex-start' : undefined }}>
           <div className="toolbar">
             <button
               className="font-btn"
@@ -303,7 +303,13 @@ function App() {
               {isConverting ? 'Convirtiendo...' : 'Descargar PDF'}
             </button>
           </div>
-          <div className="pdf-viewer" style={{ zoom: fontScale }}>
+          <div
+            className="pdf-viewer"
+            style={{
+              width: `${100 * fontScale}%`,
+              maxWidth: fontScale !== 1 ? 'none' : undefined,
+            }}
+          >
             {Array.from(new Array(numPages), (el, index) => (
               <PdfPage
                 key={`page_${index + 1}`}
