@@ -148,24 +148,28 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
   color: transparent;
   line-height: 1;
   opacity: 1;
   -webkit-user-select: text;
   user-select: text;
+  transform-origin: 0 0;
 }
 
-.textLayer span {
+.textLayer span,
+.textLayer br {
   color: transparent;
   position: absolute;
-  cursor: text;
-  transform-origin: 0% 0%;
-  line-height: 1;
   white-space: pre;
+  transform-origin: 0% 0%;
+  cursor: text;
+  line-height: 1;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.textLayer .endOfContent {
+  user-select: none;
 }
 
 .textLayer ::selection {

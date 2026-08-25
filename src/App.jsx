@@ -540,40 +540,43 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
         setChunksInfo({ chunks, totalHeight, width: viewport.width, renderScale });
         const textContent = await page.getTextContent();
 
-        // 2. Render Text Layer for highlighting
+        // 2. Render Text Layer using pdfjs-dist's native TextLayer for accurate font metrics
         const textLayerDiv = textLayerRef.current;
         textLayerDiv.innerHTML = '';
-        
-        textContent.items.forEach(item => {
-          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-          const fontHeight = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3]));
-          const fontAscent = fontHeight;
-          const originalTop = tx[5] - fontAscent;
-          let mappedTop = -9999;
-          
+        textLayerDiv.style.width = `${viewport.width}px`;
+        textLayerDiv.style.height = `${viewport.height}px`;
+        textLayerDiv.style.transform = 'none';
+
+        const textLayerInstance = new pdfjsLib.TextLayer({
+          textContentSource: textContent,
+          container: textLayerDiv,
+          viewport: viewport,
+        });
+        await textLayerInstance.render();
+
+        // Remap Y positions through chunks (remove whitespace gaps)
+        const allChildren = textLayerDiv.children;
+        for (let i = 0; i < allChildren.length; i++) {
+          const div = allChildren[i];
+          if (!div.style.top) continue;
+          const top = parseFloat(div.style.top);
+          if (isNaN(top)) continue;
+
+          let mappedTop = null;
           for (const c of chunks) {
-            if (originalTop + (fontHeight/2) >= c.start && originalTop <= c.end) {
-              mappedTop = c.newY + (originalTop - c.start);
+            if (top >= c.start && top <= c.end) {
+              mappedTop = c.newY + (top - c.start);
               break;
             }
           }
-          
-          if (mappedTop === -9999) return;
-          
-          const div = document.createElement('span');
-          div.textContent = item.str;
-          div.style.left = `${tx[4]}px`;
-          div.style.top = `${mappedTop}px`;
-          div.style.fontSize = `${fontHeight}px`;
-          div.style.fontFamily = item.fontName;
-          
-          const targetWidth = item.width * renderScale; 
-          div.style.width = `${targetWidth}px`;
-          div.style.display = 'inline-block';
-          div.style.transform = `scaleX(1.0)`;
-          
-          textLayerDiv.appendChild(div);
-        });
+
+          if (mappedTop !== null) {
+            div.style.top = `${mappedTop}px`;
+          } else {
+            div.style.display = 'none';
+          }
+        }
+        textLayerDiv.style.height = `${totalHeight}px`;
 
         setIsVisible(true);
 
@@ -745,8 +748,6 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
           width: chunksInfo.width ? `${chunksInfo.width}px` : '100%',
           height: chunksInfo.totalHeight ? `${chunksInfo.totalHeight}px` : '100%',
           transformOrigin: '0 0',
-          lineHeight: 1.5,
-          fontSize: '16px'
         }}
       >
           {highlights && highlights.map((hl) => (
