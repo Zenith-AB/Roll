@@ -50,6 +50,18 @@ function App() {
   const [editingHighlight, setEditingHighlight] = useState(null);
   const [fontSizeIndex, setFontSizeIndex] = useState(3);
   const fontScale = FONT_SIZES[fontSizeIndex];
+  const scrollContainerRef = useRef(null);
+  const prevFontScaleRef = useRef(fontScale);
+
+  useEffect(() => {
+    if (!scrollContainerRef.current) return;
+    const el = scrollContainerRef.current;
+    if (fontScale !== prevFontScaleRef.current) {
+      const centerOffset = (el.scrollWidth - el.clientWidth) / 2;
+      el.scrollTo({ left: Math.max(0, centerOffset), behavior: 'instant' });
+      prevFontScaleRef.current = fontScale;
+    }
+  }, [fontScale]);
 
   const processFile = useCallback(async (file) => {
     if (!file || file.type !== 'application/pdf') return;
@@ -242,7 +254,7 @@ function App() {
   }, [highlights]);
 
   return (
-    <div className="webtoon-container">
+    <div className="webtoon-container" ref={scrollContainerRef}>
       {!pdf && (
         <div className="upload-section">
           <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="Rollo Logo" className="app-logo" />
@@ -644,7 +656,8 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       if (resizeObserver) resizeObserver.disconnect();
       if (loadedPage) loadedPage.cleanup();
     };
-  }, [pdf, pageNumber, isNearViewport, fontScale]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontScale intentionally excluded: PDF renders once, zoom is CSS-only
+  }, [pdf, pageNumber, isNearViewport]);
 
   const openContextMenu = (_clientX, _clientY) => {
     const selection = window.getSelection();
