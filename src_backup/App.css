@@ -1,0 +1,200 @@
+.webtoon-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.upload-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 600px;
+  padding: 40px 20px;
+  margin: auto;
+  flex: 1;
+}
+
+.subtitle {
+  color: var(--text);
+  margin-bottom: 32px;
+  font-size: 1.1rem;
+}
+
+.dropzone {
+  width: 100%;
+  border: 2px dashed var(--border);
+  border-radius: 16px;
+  background-color: var(--bg-secondary);
+  transition: all 0.3s ease;
+  cursor: pointer;
+  box-sizing: border-box;
+  box-shadow: var(--shadow);
+}
+
+.dropzone:hover {
+  border-color: var(--accent);
+  background-color: var(--accent-bg);
+  transform: translateY(-2px);
+}
+
+.dropzone.dragging {
+  border-color: var(--accent);
+  background-color: var(--accent-bg);
+  transform: scale(1.02);
+}
+
+.dropzone-content {
+  padding: 60px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-icon {
+  width: 48px;
+  height: 48px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  transition: transform 0.3s ease;
+}
+
+.dropzone:hover .upload-icon {
+  transform: translateY(-4px);
+}
+
+.dropzone-content h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.dropzone-content p {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.upload-button {
+  margin-top: 16px;
+  padding: 10px 24px;
+  background-color: var(--accent);
+  color: #ffffff;
+  border-radius: 8px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+  display: inline-block;
+}
+
+.upload-button:hover {
+  background-color: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.upload-button input[type="file"] {
+  display: none;
+}
+
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 800px;
+  background: var(--bg-secondary);
+  min-height: 100vh;
+  box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+/* Ensure ZERO gap between canvas elements */
+.webtoon-canvas {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  vertical-align: top;
+  border: none;
+  opacity: 0;
+  transition: opacity 0.5s ease-in;
+}
+
+.webtoon-canvas.fade-in {
+  opacity: 1;
+}
+
+/* Text Layer for highlighting */
+.textLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  color: transparent;
+  line-height: 1;
+  opacity: 1;
+}
+
+.textLayer span {
+  color: transparent;
+  position: absolute;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer ::selection {
+  background: rgba(0, 0, 255, 0.3);
+  color: transparent;
+}
+
+.pdf-viewer-container {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.floating-actions {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 100;
+}
+
+.download-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--accent, #646cff);
+  color: white;
+  border: none;
+  border-radius: 50px;
+  padding: 12px 24px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  transition: transform 0.2s, background-color 0.2s;
+}
+
+.download-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background-color: #747bff;
+}
+
+.download-button:disabled {
+  background-color: #555;
+  cursor: not-allowed;
+}
+
+.download-button svg {
+  width: 20px;
+  height: 20px;
+}
