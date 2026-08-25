@@ -85,7 +85,7 @@ function App() {
         const p = pages[i];
         const pdfjsPage = await pdf.getPage(i + 1);
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
-        let renderScale = isMobile ? 1.5 : 2.0;
+        let renderScale = (isMobile ? 1.5 : 2.0) * fontScale;
         let renderViewport = pdfjsPage.getViewport({ scale: renderScale });
         const MAX_AREA = isMobile ? 3000000 : 10000000;
         if (renderViewport.width * renderViewport.height > MAX_AREA) {
@@ -303,7 +303,7 @@ function App() {
               {isConverting ? 'Convirtiendo...' : 'Descargar PDF'}
             </button>
           </div>
-          <div className="pdf-viewer">
+          <div className="pdf-viewer" style={{ zoom: fontScale }}>
             {Array.from(new Array(numPages), (el, index) => (
               <PdfPage
                 key={`page_${index + 1}`}
