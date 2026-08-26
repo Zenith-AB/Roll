@@ -163,6 +163,7 @@ const LIGATURE_FIXES = [
   [/ơ/g, 'tí'],
   [/Ʃ/g, 'tt'],
   [/İ/g, 'fí'],
+  [/Ō/g, 'ft'],
   [/„/g, ','],
 ];
 
@@ -174,11 +175,32 @@ function repairLigatures(str) {
   return out;
 }
 
+// Safari (all versions, iOS 18 included) does not implement
+// ReadableStream[Symbol.asyncIterator], and pdf.js's getTextContent() consumes
+// its own stream with `for await (const chunk of stream)`. On iPhone that threw
+// "undefined is not a function (near '...e of t...')" the instant a PDF was
+// opened — the app loaded fine and then nothing could ever be extracted.
+// Driving the reader by hand works on every engine.
+async function readTextItems(page) {
+  if (typeof page.streamTextContent !== 'function') {
+    return (await page.getTextContent()).items;
+  }
+  const reader = page.streamTextContent().getReader();
+  const items = [];
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    // push one by one: spreading a huge chunk can overflow the call stack
+    for (const item of value?.items || []) items.push(item);
+  }
+  return items;
+}
+
 async function collectTextItems(pdf) {
   const items = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
+    const content = { items: await readTextItems(page) };
     for (const item of content.items) {
       if (!item.str || !item.str.trim()) continue;
       items.push({
