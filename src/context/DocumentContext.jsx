@@ -40,7 +40,10 @@ export function DocumentProvider({ children }) {
       console.error('Error al extraer texto del PDF:', err);
       setDocContent(null);
       setTotalPages(0);
-      setError(err?.message || String(err));
+      // Include where it broke: on a phone there is no console, so the first
+      // stack frame is the only clue about which call actually failed.
+      const frame = (err?.stack || '').split('\n')[1]?.trim().slice(0, 120);
+      setError((err?.message || String(err)) + (frame ? ` [${frame}]` : ''));
     } finally {
       setIsExtracting(false);
     }

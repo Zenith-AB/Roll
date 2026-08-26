@@ -10,6 +10,28 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
+// Safari never got async iteration on ReadableStream. Our own extraction no
+// longer depends on it, but pdf.js still has other `for await (… of stream)`
+// paths that some documents reach, so install the iterator it is missing.
+if (
+  typeof ReadableStream !== 'undefined' &&
+  !ReadableStream.prototype[Symbol.asyncIterator]
+) {
+  ReadableStream.prototype[Symbol.asyncIterator] = function () {
+    const reader = this.getReader();
+    return {
+      next: () => reader.read(),
+      async return(value) {
+        await reader.cancel();
+        return { done: true, value };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+  };
+}
+
 export async function loadPdfFromFile(file) {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
