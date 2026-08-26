@@ -15,7 +15,13 @@ export async function extractDocument(pdf) {
   const items = await collectTextItems(pdf);
   if (!items.length) return [];
 
-  const gutterByPage = computeGutters(items);
+  // Two passes: a naive line grouping (no columns) is needed to *verify* a
+  // candidate gutter before trusting it, otherwise a false positive slices
+  // ordinary prose lines in half and scatters their right-hand halves.
+  const naiveLines = groupIntoLines(items, new Map());
+  if (!naiveLines.length) return [];
+  const gutterByPage = validateGutters(computeGutters(items), naiveLines);
+
   const rawLines = groupIntoLines(items, gutterByPage);
   if (!rawLines.length) return [];
 
@@ -38,7 +44,72 @@ export async function extractDocument(pdf) {
   const primaryBlocks = buildBlocks(lines.filter((l) => !l.aside), ctx, true);
   const asideBlocks = buildBlocks(lines.filter((l) => l.aside), ctx, false);
 
-  return dropNoiseBlocks(interleaveByPage(primaryBlocks, asideBlocks));
+  const blocks = dropNoiseBlocks(interleaveByPage(primaryBlocks, asideBlocks));
+  return coalesceFragments(demoteTableRows(blocks));
+}
+
+// Table rows get styled like headings in many papers ("Procedimental 18 8 26"),
+// which promoted them into the outline and rendered them huge. Two or more
+// bare numbers in a short line is a data row, not a section title.
+function demoteTableRows(blocks) {
+  return blocks.map((b) => {
+    if (b.type === 'paragraph' || b.type === 'verse') return b;
+    if (detectNumberedHeading(b.text)) return b; // "3.2.1. Título" is genuine
+    const numbers = b.text.match(/\d+/g) || [];
+    return numbers.length >= 2 ? { ...b, type: 'paragraph' } : b;
+  });
+}
+
+const FRAGMENT_MAX_CHARS = 70;
+
+// Table cells arrive as a long run of tiny blocks. Rendered one-per-block they
+// became a cascade of little cards that buried the text. Collapse each run into
+// a single block so a table reads as one unit on a phone.
+function coalesceFragments(blocks) {
+  const out = [];
+  let i = 0;
+
+  while (i < blocks.length) {
+    const b = blocks[i];
+
+    if (b.aside) {
+      const group = [b];
+      let j = i + 1;
+      while (j < blocks.length && blocks[j].aside && blocks[j].page === b.page) {
+        group.push(blocks[j]);
+        j++;
+      }
+      out.push({ ...b, text: group.map((g) => g.text).join('\n') });
+      i = j;
+      continue;
+    }
+
+    if (isFragment(b)) {
+      const group = [b];
+      let j = i + 1;
+      while (j < blocks.length && blocks[j].page === b.page && isFragment(blocks[j])) {
+        group.push(blocks[j]);
+        j++;
+      }
+      if (group.length >= 3) {
+        out.push({ ...b, type: 'table', text: group.map((g) => g.text).join('\n') });
+        i = j;
+        continue;
+      }
+    }
+
+    out.push(b);
+    i++;
+  }
+
+  return out;
+}
+
+function isFragment(b) {
+  if (b.aside) return false;
+  if (b.type === 'heading' || b.type === 'subheading' || b.type === 'subheading2') return false;
+  if (detectNumberedHeading(b.text)) return false;
+  return b.text.length <= FRAGMENT_MAX_CHARS;
 }
 
 // Page furniture — a running header/footer reprinted on every page, and bare
@@ -133,6 +204,43 @@ function computeGutters(items) {
   const gutters = new Map();
   byPage.forEach((pageItems, page) => gutters.set(page, findGutterX(pageItems)));
   return gutters;
+}
+
+// A real column gutter is a vertical corridor that no text crosses. On a
+// normal prose page the widest x-gap between items is just an accident of
+// word spacing, and treating it as a gutter chops every line in two and
+// exiles the right-hand halves — text appears to vanish mid-sentence. So a
+// candidate is only trusted when almost no line spans it and both sides
+// hold a real block of text.
+function validateGutters(candidates, naiveLines) {
+  const byPage = new Map();
+  for (const l of naiveLines) {
+    if (!byPage.has(l.page)) byPage.set(l.page, []);
+    byPage.get(l.page).push(l);
+  }
+
+  const validated = new Map();
+  candidates.forEach((gutterX, page) => {
+    if (gutterX == null) return;
+    const pageLines = byPage.get(page) || [];
+    if (pageLines.length < 6) return;
+
+    const tol = 2;
+    let crossing = 0;
+    let left = 0;
+    let right = 0;
+    for (const l of pageLines) {
+      if (l.xLeft < gutterX - tol && l.xRight > gutterX + tol) crossing++;
+      else if (l.xRight <= gutterX + tol) left++;
+      else right++;
+    }
+
+    if (crossing / pageLines.length > 0.1) return; // text spans it: not a gutter
+    if (left < 4 || right < 4) return; // one side is too thin to be a column
+    validated.set(page, gutterX);
+  });
+
+  return validated;
 }
 
 function findGutterX(pageItems) {
@@ -366,13 +474,41 @@ function buildBlocks(lines, ctx, allowCrossPage) {
 
     const numbered = detectNumberedHeading(line.text);
     if (numbered || isHeadingLine(line, modalFontSize)) {
+      // A heading that wrapped onto a second line must be rejoined, or the
+      // outline shows a truncated title and an orphan word ("…inicial de" /
+      // "profesores"). Only a short trailing line is absorbed, so the
+      // paragraph that follows a heading is never swallowed.
+      const parts = [line];
+      let k = i + 1;
+      const headEdge = (line.aside ? edges.aside : edges.primary) || {};
+      while (k < lines.length) {
+        const nx = lines[k];
+        if (!nx.text) { k++; continue; }
+        const prevPart = parts[parts.length - 1];
+        if (nx.page !== prevPart.page) break;
+        if (Math.abs(nx.fontSize - prevPart.fontSize) > 0.5) break;
+        if (detectNumberedHeading(nx.text)) break;
+        const gap = prevPart.y - nx.y;
+        const gapRef = modalLineGap || prevPart.fontSize * 1.2;
+        if (gap <= 0 || gap > gapRef * 1.8) break;
+        if (headEdge.right == null) break;
+        const prevWrapped = prevPart.xRight >= headEdge.right - prevPart.fontSize * 6;
+        const nxIsShort = nx.xRight < headEdge.right - nx.fontSize * 6;
+        if (!prevWrapped || !nxIsShort) break;
+        parts.push(nx);
+        k++;
+        break; // one continuation line is enough
+      }
+
+      const headingText = parts.map((p) => p.text).join(' ');
+      const rejoined = parts.length > 1 ? detectNumberedHeading(headingText) : numbered;
       blocks.push({
-        text: numbered ? numbered.text : line.text,
-        type: numbered ? numbered.type : 'heading',
+        text: rejoined ? rejoined.text : headingText,
+        type: rejoined ? rejoined.type : 'heading',
         page: line.page,
         aside: line.aside,
       });
-      i++;
+      i = k;
       continue;
     }
 
@@ -436,17 +572,15 @@ function buildBlocks(lines, ctx, allowCrossPage) {
     // only treat it as verse when line breaks are the dominant pattern.
     const breakRatio = joins.length ? joins.filter((j) => j === 'break').length / joins.length : 0;
     const isVerse = breakRatio >= 0.4;
-    const isSub =
-      !isVerse &&
-      run.length === 1 &&
-      run[0].fontSize < modalFontSize * 0.97 &&
-      run[0].itemCount <= 10 &&
-      looksLikeHeadingText(run[0].text);
 
+    // Note: smaller-than-body text is NOT a subheading — in a PDF that means
+    // footnotes, captions, table cells and reference lists. Treating it as one
+    // filled the outline with fragments. Subheadings come from section
+    // numbering or a larger font, both handled above.
     if (text) {
       blocks.push({
         text,
-        type: isVerse ? 'verse' : isSub ? 'subheading' : 'paragraph',
+        type: isVerse ? 'verse' : 'paragraph',
         page: run[0].page,
         aside: run[0].aside,
       });

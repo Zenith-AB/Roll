@@ -372,10 +372,29 @@
   margin-bottom: 0;
 }
 
+/* Tabular data, collapsed into one block. It keeps its row breaks and may be
+   wider than the screen, so it scrolls inside its own box rather than forcing
+   the whole page to scroll sideways. */
+.doc-table {
+  text-indent: 0;
+  white-space: pre-line;
+  -webkit-hyphens: none;
+  hyphens: none;
+  color: var(--text);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 0.6em 0 1em;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Content that lived in a sidebar/footnote column in the PDF (author
    contact info, callouts) — shown as a distinct boxed note instead of a
    second column, since a real side-by-side layout doesn't fit a phone. */
 .doc-aside {
+  white-space: pre-line;
   text-indent: 0;
   color: var(--text);
   background: var(--bg-secondary);

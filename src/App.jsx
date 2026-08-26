@@ -247,7 +247,7 @@ function AppContent() {
                       ? subheadingStyles
                       : para.type === 'subheading2'
                         ? subheading2Styles
-                        : para.aside
+                        : para.aside || para.type === 'table'
                           ? asideStyles
                           : para.type === 'verse'
                             ? verseStyles
