@@ -1,0 +1,20 @@
+{
+  "name": "Rollo",
+  "short_name": "Rollo",
+  "description": "Convierte tu PDF en un documento interactivo con subrayados, notas y herramientas de lectura",
+  "start_url": "/Roll/",
+  "scope": "/Roll/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "productivity"]
+}
