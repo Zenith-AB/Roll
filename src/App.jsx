@@ -319,7 +319,7 @@ function App() {
             className="pdf-viewer"
             style={{
               width: `${100 * fontScale}%`,
-              maxWidth: fontScale !== 1 ? 'none' : undefined,
+              maxWidth: `${800 * fontScale}px`,
             }}
           >
             {Array.from(new Array(numPages), (el, index) => (
