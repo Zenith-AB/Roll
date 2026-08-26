@@ -1,6 +1,30 @@
 import { useState, useCallback } from 'react';
 import { useDocument } from '../context/DocumentContext';
 
+function describeEnvironment() {
+  const ua = navigator.userAgent || '';
+  const ios = ua.match(/OS (\d+)[._](\d+)/);
+  const has = (label, ok) => `${label}:${ok ? 'ok' : 'NO'}`;
+  let moduleWorker = false;
+  try {
+    // Feature-detect module workers without actually spawning one.
+    new Worker('data:text/javascript,', {
+      get type() {
+        moduleWorker = true;
+        return 'module';
+      },
+    }).terminate();
+  } catch {
+    /* detection failed; leave as false */
+  }
+  return [
+    ios ? `iOS ${ios[1]}.${ios[2]}` : 'iOS ?',
+    has('withResolvers', typeof Promise.withResolvers === 'function'),
+    has('structuredClone', typeof structuredClone === 'function'),
+    has('moduleWorker', moduleWorker),
+  ].join(' · ');
+}
+
 export default function UploadScreen() {
   const { loadPdf, error } = useDocument();
   const [isDragging, setIsDragging] = useState(false);
@@ -44,9 +68,12 @@ export default function UploadScreen() {
       </p>
 
       {error && (
-        <p className="upload-error" role="alert">
-          {error}
-        </p>
+        <div className="upload-error" role="alert">
+          <p>{error}</p>
+          {/* Shown only on failure: on a phone there is no console, so this is
+              the only way to find out which capability the device is missing. */}
+          <p className="upload-diag">{describeEnvironment()}</p>
+        </div>
       )}
 
       <label className="upload-button">

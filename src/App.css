@@ -214,6 +214,14 @@
   line-height: 1.5;
 }
 
+.upload-diag {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.75;
+  word-break: break-word;
+}
+
 .dropzone {
   margin-top: 24px;
   padding: 24px 32px;

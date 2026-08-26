@@ -1,7 +1,12 @@
-import * as pdfjsLib from 'pdfjs-dist';
+// Legacy build, deliberately: the default build calls Promise.withResolvers()
+// (13 times inside the worker alone) without shipping a polyfill, and that API
+// only exists from Safari/iOS 17.4. On any older iPhone the worker threw
+// immediately and no PDF could ever be read. The legacy bundle ships the
+// polyfill in both the main thread and the worker.
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
+  'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
   import.meta.url
 ).toString();
 
