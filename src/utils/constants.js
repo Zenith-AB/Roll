@@ -13,7 +13,7 @@ export const THEMES = {
     bg: '#121212',
     bgSecondary: '#1e1e1e',
     bgTertiary: '#2a2a2a',
-    text: '#9ca3af',
+    text: '#b8bfc7',
     textH: '#f3f4f6',
     border: '#333333',
     accent: '#8b5cf6',

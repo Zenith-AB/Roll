@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react';
 
-const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, isSearchActive, onHighlightClick }) {
+const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, isSearchActive, onHighlightClick, style }) {
   const text = para.text;
 
   const segments = useMemo(() => {
@@ -49,7 +49,7 @@ const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, 
     .join(' ');
 
   return (
-    <Tag className={classNames} data-idx={idx}>
+    <Tag className={classNames} data-idx={idx} style={style}>
       {segments.map((seg, i) =>
         seg.highlight ? (
           <mark

@@ -217,16 +217,16 @@ function AppContent() {
                       : readingStyles;
 
                 return (
-                  <div key={idx} style={style}>
-                    <Paragraph
-                      idx={idx}
-                      para={para}
-                      highlights={paraHighlights}
-                      searchQuery={searchQuery}
-                      isSearchActive={false}
-                      onHighlightClick={setEditingHighlightId}
-                    />
-                  </div>
+                  <Paragraph
+                    key={idx}
+                    idx={idx}
+                    para={para}
+                    highlights={paraHighlights}
+                    searchQuery={searchQuery}
+                    isSearchActive={false}
+                    onHighlightClick={setEditingHighlightId}
+                    style={style}
+                  />
                 );
               })}
             </article>
