@@ -19,7 +19,9 @@ export async function extractDocument(pdf) {
   const rawLines = groupIntoLines(items, gutterByPage);
   if (!rawLines.length) return [];
 
-  const lines = assignReadingOrder(rawLines);
+  const ordered = assignReadingOrder(rawLines);
+  const lines = stripPageFurniture(ordered);
+  if (!lines.length) return [];
 
   const modalFontSize = mode(lines.map((l) => l.fontSize), 10) || 12;
   const modalLineGap = findModalLineGap(lines);
@@ -28,21 +30,51 @@ export async function extractDocument(pdf) {
     aside: bodyEdges(lines.filter((l) => l.aside), modalFontSize),
   };
 
-  const blocks = buildBlocks(lines, { modalFontSize, modalLineGap, edges });
-  return removeRunningHeaders(blocks);
+  // The main text is built as ONE continuous stream across every page, so a
+  // paragraph split by a page break is rejoined instead of being cut in two.
+  // Asides are built separately (they are self-contained boxes) and slotted
+  // back in at the page where they appeared.
+  const ctx = { modalFontSize, modalLineGap, edges };
+  const primaryBlocks = buildBlocks(lines.filter((l) => !l.aside), ctx, true);
+  const asideBlocks = buildBlocks(lines.filter((l) => l.aside), ctx, false);
+
+  return dropNoiseBlocks(interleaveByPage(primaryBlocks, asideBlocks));
 }
 
-// A line repeated verbatim across several different pages is a running
-// header/footer (page furniture reprinted by the layout), not article
-// content — real prose or verse essentially never repeats exactly across
-// 3+ pages. Strip it so it doesn't clutter the reading flow or the TOC.
-function removeRunningHeaders(blocks) {
+// Page furniture — a running header/footer reprinted on every page, and bare
+// page numbers — is layout scaffolding, not content. Removing it at the line
+// level (before paragraphs are assembled) is what lets a paragraph flow
+// uninterrupted across a page boundary.
+function stripPageFurniture(lines) {
   const pagesByText = new Map();
-  for (const b of blocks) {
-    if (!pagesByText.has(b.text)) pagesByText.set(b.text, new Set());
-    pagesByText.get(b.text).add(b.page);
+  for (const l of lines) {
+    const key = l.text.trim();
+    if (!key) continue;
+    if (!pagesByText.has(key)) pagesByText.set(key, new Set());
+    pagesByText.get(key).add(l.page);
   }
-  return blocks.filter((b) => pagesByText.get(b.text).size < 3);
+
+  return lines.filter((l) => {
+    const t = l.text.trim();
+    if (!t) return false;
+    if (/^\d{1,4}$/.test(t)) return false; // standalone page number
+    return (pagesByText.get(t)?.size ?? 0) < 3; // repeated on 3+ pages
+  });
+}
+
+function interleaveByPage(primaryBlocks, asideBlocks) {
+  const tagged = [
+    ...primaryBlocks.map((b, i) => ({ b, rank: 0, i })),
+    ...asideBlocks.map((b, i) => ({ b, rank: 1, i })),
+  ];
+  tagged.sort((x, y) => x.b.page - y.b.page || x.rank - y.rank || x.i - y.i);
+  return tagged.map((t) => t.b);
+}
+
+// Stray table cells and math fragments ("13", "x") survive as one- or
+// zero-letter blocks and just add noise to a reading view.
+function dropNoiseBlocks(blocks) {
+  return blocks.filter((b) => (b.text.match(/\p{L}/gu) || []).length >= 2);
 }
 
 // Some embedded PDF fonts map ligature glyphs (ti, tt, fí…) to unrelated
@@ -178,8 +210,10 @@ function finalizeLine(line) {
   return {
     text,
     fontSize,
-    xLeft: Math.min(...items.map((it) => it.x)),
-    xRight: Math.max(...items.map((it) => it.x + it.width)),
+    // Reduce rather than spread: a pathological PDF can put thousands of runs
+    // on one baseline, and Math.min(...huge) blows the call stack.
+    xLeft: items.reduce((m, it) => Math.min(m, it.x), Infinity),
+    xRight: items.reduce((m, it) => Math.max(m, it.x + it.width), -Infinity),
     y: line.y,
     page: line.page,
     side: line.side,
@@ -318,7 +352,7 @@ function detectNumberedHeading(text) {
 
 // Walks the line list, fusing wrapped prose lines into flowing paragraphs
 // while keeping intentional line breaks (verse/poetry) intact.
-function buildBlocks(lines, ctx) {
+function buildBlocks(lines, ctx, allowCrossPage) {
   const { modalFontSize, modalLineGap, edges } = ctx;
   const blocks = [];
   let i = 0;
@@ -355,13 +389,7 @@ function buildBlocks(lines, ctx) {
       if (isHeadingLine(next, modalFontSize) || detectNumberedHeading(next.text)) break;
 
       const prev = run[run.length - 1];
-      const sameSize = Math.abs(prev.fontSize - next.fontSize) <= 0.5;
-      const sameRegion = prev.aside === next.aside;
-      const gap = prev.page === next.page && sameRegion ? prev.y - next.y : null;
-      if (!sameSize || gap === null || gap <= 0) break;
-
-      const gapRef = modalLineGap || prev.fontSize * 1.2;
-      if (gap > gapRef * 1.6) break; // blank line — paragraph/stanza break
+      if (Math.abs(prev.fontSize - next.fontSize) > 0.5) break;
 
       const bodyEdge = (next.aside ? edges.aside : edges.primary) || {};
       const isIndented =
@@ -370,11 +398,26 @@ function buildBlocks(lines, ctx) {
 
       const reachesMargin =
         bodyEdge.right != null && prev.xRight >= bodyEdge.right - prev.fontSize * 3;
-
       const isHyphenBreak =
         reachesMargin && /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(next.text);
 
-      joins.push(isHyphenBreak ? 'hyphen' : reachesMargin ? 'space' : 'break');
+      if (next.page === prev.page) {
+        const gap = prev.y - next.y;
+        if (gap <= 0) break;
+        const gapRef = modalLineGap || prev.fontSize * 1.2;
+        if (gap > gapRef * 1.6) break; // blank line — paragraph/stanza break
+        joins.push(isHyphenBreak ? 'hyphen' : reachesMargin ? 'space' : 'break');
+      } else if (allowCrossPage && next.page > prev.page) {
+        // Rejoin a paragraph the PDF split across a page break, but only when
+        // the previous page truly ended mid-paragraph: its last line ran to
+        // the margin and didn't close a sentence.
+        if (!reachesMargin) break;
+        if (/[.!?:;]["'”’)\]]?$/.test(prev.text)) break;
+        joins.push(isHyphenBreak ? 'hyphen' : 'space');
+      } else {
+        break;
+      }
+
       run.push(next);
       j++;
     }

@@ -2,13 +2,15 @@ import { useState, useCallback } from 'react';
 import { useDocument } from '../context/DocumentContext';
 
 export default function UploadScreen() {
-  const { loadPdf } = useDocument();
+  const { loadPdf, error } = useDocument();
   const [isDragging, setIsDragging] = useState(false);
 
   const handleFileUpload = useCallback(
     (e) => {
       const file = e.target.files?.[0];
       if (file) loadPdf(file);
+      // Let the same file be picked again after an error.
+      e.target.value = '';
     },
     [loadPdf]
   );
@@ -41,9 +43,18 @@ export default function UploadScreen() {
         Convierte tu PDF en un documento interactivo con subrayados, notas y herramientas de lectura
       </p>
 
+      {error && (
+        <p className="upload-error" role="alert">
+          {error}
+        </p>
+      )}
+
       <label className="upload-button">
         Seleccionar PDF
-        <input type="file" accept="application/pdf" onChange={handleFileUpload} />
+        {/* Include the `.pdf` extension, not just the MIME type: iOS matches
+            document-provider files (iCloud/Drive) by extension, and a
+            MIME-only filter can grey them out in the picker. */}
+        <input type="file" accept=".pdf,application/pdf" onChange={handleFileUpload} />
       </label>
 
       <div

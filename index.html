@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#121212" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -15,6 +15,32 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- On a phone there is no console to open: if the bundle fails to parse
+         or a runtime error escapes React, the page would just stay blank.
+         Surface it on screen instead so the failure is reportable. -->
+    <script>
+      (function () {
+        function show(message) {
+          var el = document.getElementById('boot-error');
+          if (!el) {
+            el = document.createElement('pre');
+            el.id = 'boot-error';
+            el.style.cssText =
+              'margin:16px;padding:14px;border:1px solid #f87171;border-radius:12px;' +
+              'background:#2a1414;color:#fca5a5;font:13px/1.5 ui-monospace,monospace;' +
+              'white-space:pre-wrap;word-break:break-word;position:relative;z-index:99999';
+            document.body.appendChild(el);
+          }
+          el.textContent = 'Error: ' + message;
+        }
+        window.addEventListener('error', function (e) {
+          show((e.message || 'desconocido') + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          show('Promesa rechazada: ' + ((e.reason && (e.reason.message || e.reason)) || 'desconocido'));
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

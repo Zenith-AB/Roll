@@ -8,18 +8,39 @@ export function DocumentProvider({ children }) {
   const [fileName, setFileName] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const [totalPages, setTotalPages] = useState(0);
+  const [error, setError] = useState(null);
 
   const loadPdf = useCallback(async (file) => {
-    if (!file || file.type !== 'application/pdf') return;
-    setFileName(file.name);
+    if (!file) return;
+
+    // iOS hands over files from Files/iCloud/Drive with an empty or generic
+    // MIME type, so a strict `type === 'application/pdf'` check silently threw
+    // the file away and nothing happened on screen. Accept by extension too,
+    // and let pdf.js be the real judge of whether it can parse it.
+    const looksLikePdf =
+      /pdf/i.test(file.type || '') || /\.pdf$/i.test(file.name || '');
+
+    setError(null);
+    setFileName(file.name || 'documento.pdf');
     setIsExtracting(true);
     try {
+      if (!looksLikePdf && file.type) {
+        throw new Error(`El archivo no parece un PDF (${file.type}).`);
+      }
       const doc = await loadPdfFromFile(file);
+      if (!doc.length) {
+        throw new Error(
+          'No se encontró texto en este PDF. Si es un documento escaneado, ' +
+            'las páginas son imágenes y no contienen texto seleccionable.'
+        );
+      }
       setDocContent(doc);
-      const maxPage = doc.reduce((max, p) => Math.max(max, p.page), 0);
-      setTotalPages(maxPage);
+      setTotalPages(doc.reduce((max, p) => Math.max(max, p.page), 0));
     } catch (err) {
       console.error('Error al extraer texto del PDF:', err);
+      setDocContent(null);
+      setTotalPages(0);
+      setError(err?.message || String(err));
     } finally {
       setIsExtracting(false);
     }
@@ -30,6 +51,7 @@ export function DocumentProvider({ children }) {
     setFileName('');
     setIsExtracting(false);
     setTotalPages(0);
+    setError(null);
   }, []);
 
   const headings = docContent
@@ -54,6 +76,7 @@ export function DocumentProvider({ children }) {
         headings,
         wordCount,
         estimatedReadingTime,
+        error,
         loadPdf,
         reset,
       }}
