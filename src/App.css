@@ -1,12 +1,10 @@
-.webtoon-container {
-  width: 100%;
-  height: 100%;
+.app {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  flex: 1;
-  overflow-x: auto;
 }
+
+/* Upload */
 
 .upload-section {
   display: flex;
@@ -21,15 +19,16 @@
 }
 
 .app-logo {
-  width: 120px;
+  width: 100px;
   height: auto;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .subtitle {
   color: var(--text);
   margin-bottom: 32px;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
+  text-align: center;
 }
 
 .dropzone {
@@ -116,154 +115,170 @@
   border: 0;
 }
 
-/* Toolbar */
-.toolbar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 200;
+/* Loading */
+
+.loading {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 10px 16px;
+  flex: 1;
+  gap: 16px;
+  color: var(--text);
+  padding: 60px 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Document Header */
+
+.doc-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  padding: 8px 16px;
 }
 
-.font-btn {
-  background: var(--bg);
-  color: var(--text-h);
+.doc-header-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.doc-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.doc-title-text {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-doc-btn {
+  background: transparent;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  color: var(--text);
   padding: 6px 14px;
-  font-size: 14px;
-  font-weight: 600;
+  border-radius: 6px;
+  font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s, transform 0.15s;
-  min-width: 44px;
+  transition: all 0.15s;
+  flex-shrink: 0;
 }
 
-.font-btn:hover:not(:disabled) {
-  background: var(--accent);
-  color: white;
-  transform: scale(1.05);
-}
-
-.font-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.font-label {
+.new-doc-btn:hover {
+  border-color: var(--accent);
   color: var(--text-h);
-  font-size: 14px;
-  font-weight: 500;
-  min-width: 40px;
+}
+
+/* Document Body */
+
+.document-container {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 48px 24px 100px;
+}
+
+.document {
+  max-width: 720px;
+  width: 100%;
+  font-family: 'Georgia', 'Cambria', 'Times New Roman', serif;
+  font-size: 17px;
+  line-height: 1.78;
+  color: #1a1a1a;
+}
+
+.doc-empty {
   text-align: center;
+  color: var(--text);
+  padding: 60px 20px;
+  font-family: var(--sans);
+  font-size: 15px;
 }
 
-.pdf-viewer {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  background: white;
-  min-height: 100vh;
-  box-shadow: 0 0 20px rgba(0,0,0,0.5);
-}
+/* Paragraphs */
 
-/* Text Layer for highlighting */
-.textLayer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  color: transparent;
-  line-height: 1;
-  opacity: 1;
+.doc-paragraph {
+  margin-bottom: 1.15em;
   -webkit-user-select: text;
   user-select: text;
-  transform-origin: 0 0;
-  touch-action: manipulation;
 }
 
-.textLayer span,
-.textLayer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  transform-origin: 0% 0%;
-  cursor: text;
-  line-height: 1;
-  -webkit-user-select: text;
-  user-select: text;
-  -webkit-touch-callout: default;
-  touch-action: manipulation;
+.doc-paragraph.title {
+  font-size: 2em;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 0.4em;
+  line-height: 1.25;
+  font-family: var(--heading);
+  color: #111;
 }
 
-.textLayer .endOfContent {
-  user-select: none;
+.doc-paragraph.heading {
+  font-size: 1.45em;
+  font-weight: 600;
+  margin-top: 1.6em;
+  margin-bottom: 0.4em;
+  line-height: 1.3;
+  font-family: var(--heading);
+  color: #222;
 }
 
-.textLayer ::selection {
-  background: rgba(0, 0, 255, 0.3);
-  color: transparent;
+.doc-paragraph.subheading {
+  font-size: 1.08em;
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.3em;
+  font-family: var(--heading);
+  color: #333;
 }
 
-.textLayer .highlight-group {
-  pointer-events: none;
+.doc-paragraph.body {
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
 }
 
-.pdf-viewer-container {
-  position: relative;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 52px;
-}
+/* Highlights */
 
-.floating-actions {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 100;
-}
-
-.download-button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background-color: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 50px;
-  padding: 12px 24px;
-  font-size: 1rem;
-  font-weight: bold;
+.doc-highlight {
+  background-color: rgba(255, 255, 0, 0.35);
+  border-radius: 2px;
+  padding: 1px 0;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-  transition: transform 0.2s, background-color 0.2s;
+  transition: filter 0.15s;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
-.download-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  background-color: var(--accent-hover);
-}
-
-.download-button:disabled {
-  background-color: #555;
-  cursor: not-allowed;
-}
-
-.download-button svg {
-  width: 20px;
-  height: 20px;
+.doc-highlight:hover {
+  filter: brightness(0.88);
 }
 
 /* Context Menu */
+
 .context-menu {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -317,10 +332,14 @@
   color: var(--text-h);
 }
 
-/* Highlight Popover */
-.highlight-popover-overlay {
+/* Popover */
+
+.popover-overlay {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(0, 0, 0, 0.4);
   z-index: 10000;
   display: flex;
@@ -328,7 +347,7 @@
   align-items: center;
 }
 
-.highlight-popover {
+.popover {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -337,10 +356,10 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
 }
 
-.highlight-popover-header {
+.popover-header {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -349,14 +368,14 @@
   color: var(--text-h);
 }
 
-.highlight-popover-dot {
+.popover-dot {
   width: 12px;
   height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.highlight-popover-close {
+.popover-delete {
   margin-left: auto;
   background: transparent;
   border: none;
@@ -370,11 +389,11 @@
   transition: background 0.15s;
 }
 
-.highlight-popover-close:hover {
+.popover-delete:hover {
   background: rgba(239, 68, 68, 0.15);
 }
 
-.highlight-popover-textarea {
+.popover-textarea {
   width: 100%;
   padding: 10px;
   border-radius: 8px;
@@ -388,21 +407,21 @@
   min-height: 60px;
 }
 
-.highlight-popover-textarea:focus {
+.popover-textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.highlight-popover-textarea::placeholder {
+.popover-textarea::placeholder {
   color: var(--text);
 }
 
-.highlight-popover-actions {
+.popover-actions {
   display: flex;
   justify-content: flex-end;
 }
 
-.highlight-popover-done {
+.popover-done {
   padding: 6px 16px;
   background: var(--accent);
   color: white;
@@ -414,42 +433,30 @@
   transition: background 0.15s;
 }
 
-.highlight-popover-done:hover {
+.popover-done:hover {
   background: var(--accent-hover);
 }
 
+/* Responsive */
+
 @media (max-width: 768px) {
-  .toolbar {
-    padding: 8px 12px;
-    gap: 8px;
+  .document {
+    font-size: 16px;
   }
 
-  .font-btn {
-    padding: 6px 12px;
-    font-size: 13px;
+  .document-container {
+    padding: 24px 16px 60px;
   }
 
-  .floating-actions {
-    bottom: 16px;
-    right: 16px;
-    width: auto;
+  .doc-paragraph.title {
+    font-size: 1.6em;
   }
 
-  .download-button {
-    padding: 10px 16px;
-    font-size: 0;
-    border-radius: 50%;
-    width: 48px;
-    height: 48px;
-    justify-content: center;
+  .doc-paragraph.heading {
+    font-size: 1.25em;
   }
 
-  .download-button svg {
-    width: 22px;
-    height: 22px;
-  }
-
-  .highlight-popover {
+  .popover {
     width: 85%;
     max-width: 300px;
   }
