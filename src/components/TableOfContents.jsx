@@ -38,7 +38,11 @@ export default function TableOfContents({ onClose }) {
               <button
                 key={h.idx}
                 className={`toc-item ${
-                  h.type === 'heading' ? 'toc-item--heading' : 'toc-item--subheading'
+                  h.type === 'heading'
+                    ? 'toc-item--heading'
+                    : h.type === 'subheading2'
+                      ? 'toc-item--subheading2'
+                      : 'toc-item--subheading'
                 }`}
                 onClick={() => scrollToHeading(h.idx)}
               >

@@ -35,7 +35,7 @@ export function DocumentProvider({ children }) {
   const headings = docContent
     ? docContent
         .map((p, idx) => ({ ...p, idx }))
-        .filter((p) => p.type === 'heading' || p.type === 'subheading')
+        .filter((p) => p.type === 'heading' || p.type === 'subheading' || p.type === 'subheading2')
     : [];
 
   const wordCount = docContent

@@ -172,6 +172,37 @@ function AppContent() {
     [settings.fontSize]
   );
 
+  const subheading2Styles = useMemo(
+    () => ({
+      fontSize: `${Math.round(settings.fontSize * 1.05)}px`,
+      lineHeight: 1.4,
+    }),
+    [settings.fontSize]
+  );
+
+  // Verses keep their original line breaks — justify would stretch short
+  // lines and destroy the intended structure, so always align left.
+  const verseStyles = useMemo(
+    () => ({
+      fontSize: `${settings.fontSize}px`,
+      lineHeight: settings.lineHeight,
+      textAlign: 'left',
+    }),
+    [settings.fontSize, settings.lineHeight]
+  );
+
+  // Asides (sidebars, footnote/contact boxes) were a separate column in the
+  // PDF — on a phone that layout doesn't fit, so instead they render as a
+  // smaller, clearly-boxed note that stacks with the flow (see .doc-aside).
+  const asideStyles = useMemo(
+    () => ({
+      fontSize: `${Math.round(settings.fontSize * 0.88)}px`,
+      lineHeight: 1.5,
+      textAlign: 'left',
+    }),
+    [settings.fontSize]
+  );
+
   return (
     <div className="app">
       <ReadingProgress />
@@ -214,7 +245,13 @@ function AppContent() {
                     ? headingStyles
                     : para.type === 'subheading'
                       ? subheadingStyles
-                      : readingStyles;
+                      : para.type === 'subheading2'
+                        ? subheading2Styles
+                        : para.aside
+                          ? asideStyles
+                          : para.type === 'verse'
+                            ? verseStyles
+                            : readingStyles;
 
                 return (
                   <Paragraph

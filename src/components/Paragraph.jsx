@@ -36,12 +36,17 @@ const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, 
       ? 'h2'
       : para.type === 'subheading'
         ? 'h3'
-        : 'p';
+        : para.type === 'subheading2'
+          ? 'h4'
+          : 'p';
 
   const classNames = [
     'doc-paragraph',
     para.type === 'heading' ? 'doc-heading' : '',
     para.type === 'subheading' ? 'doc-subheading' : '',
+    para.type === 'subheading2' ? 'doc-subheading2' : '',
+    para.type === 'verse' ? 'doc-verse' : '',
+    para.aside ? 'doc-aside' : '',
     isSearchMatch ? 'search-match' : '',
     isSearchActive ? 'search-active' : '',
   ]

@@ -12,140 +12,405 @@ export async function loadPdfFromFile(file) {
 }
 
 export async function extractDocument(pdf) {
-  const pages = [];
+  const items = await collectTextItems(pdf);
+  if (!items.length) return [];
+
+  const gutterByPage = computeGutters(items);
+  const rawLines = groupIntoLines(items, gutterByPage);
+  if (!rawLines.length) return [];
+
+  const lines = assignReadingOrder(rawLines);
+
+  const modalFontSize = mode(lines.map((l) => l.fontSize), 10) || 12;
+  const modalLineGap = findModalLineGap(lines);
+  const edges = {
+    primary: bodyEdges(lines.filter((l) => !l.aside), modalFontSize),
+    aside: bodyEdges(lines.filter((l) => l.aside), modalFontSize),
+  };
+
+  const blocks = buildBlocks(lines, { modalFontSize, modalLineGap, edges });
+  return removeRunningHeaders(blocks);
+}
+
+// A line repeated verbatim across several different pages is a running
+// header/footer (page furniture reprinted by the layout), not article
+// content — real prose or verse essentially never repeats exactly across
+// 3+ pages. Strip it so it doesn't clutter the reading flow or the TOC.
+function removeRunningHeaders(blocks) {
+  const pagesByText = new Map();
+  for (const b of blocks) {
+    if (!pagesByText.has(b.text)) pagesByText.set(b.text, new Set());
+    pagesByText.get(b.text).add(b.page);
+  }
+  return blocks.filter((b) => pagesByText.get(b.text).size < 3);
+}
+
+// Some embedded PDF fonts map ligature glyphs (ti, tt, fí…) to unrelated
+// Unicode code points because their ToUnicode CMap is broken/partial. This
+// shows up as garbage like "gesƟón" or "hƩp" instead of "gestión" / "http".
+// The mapping below was reverse-engineered from a real affected document —
+// each code point consistently stands for the same ligature everywhere.
+const LIGATURE_FIXES = [
+  [/Ɵ/g, 'ti'],
+  [/ơ/g, 'tí'],
+  [/Ʃ/g, 'tt'],
+  [/İ/g, 'fí'],
+  [/„/g, ','],
+];
+
+function repairLigatures(str) {
+  let out = str;
+  for (const [pattern, replacement] of LIGATURE_FIXES) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+async function collectTextItems(pdf) {
+  const items = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    pages.push({ items: content.items });
+    for (const item of content.items) {
+      if (!item.str || !item.str.trim()) continue;
+      items.push({
+        str: repairLigatures(item.str),
+        x: item.transform[4],
+        y: item.transform[5],
+        width: item.width ?? 0,
+        fontSize: Math.hypot(item.transform[0], item.transform[1]),
+        page: i,
+      });
+    }
+  }
+  return items;
+}
+
+// Finds, per page, the x position of a real column gutter — a wide gap in
+// the page's raw item positions with a healthy population of text on each
+// side. Working from raw items (not yet-grouped lines) gives a much denser
+// sample of "what x ranges have text on them", so even a tight marginalia
+// gutter (a sidebar box sitting snug against the main column) shows up as
+// a real gap rather than being lost in per-line noise.
+function computeGutters(items) {
+  const byPage = new Map();
+  for (const it of items) {
+    if (!byPage.has(it.page)) byPage.set(it.page, []);
+    byPage.get(it.page).push(it);
+  }
+  const gutters = new Map();
+  byPage.forEach((pageItems, page) => gutters.set(page, findGutterX(pageItems)));
+  return gutters;
+}
+
+function findGutterX(pageItems) {
+  const MIN_ITEMS = 20;
+  const MIN_CLUSTER = 6;
+  const MIN_GUTTER = 18;
+
+  if (pageItems.length < MIN_ITEMS) return null;
+
+  const sorted = [...pageItems].sort((a, b) => a.x - b.x);
+  let bestIdx = -1;
+  let bestGap = 0;
+  for (let i = MIN_CLUSTER; i < sorted.length - MIN_CLUSTER; i++) {
+    const gap = sorted[i].x - sorted[i - 1].x;
+    if (gap > bestGap) {
+      bestGap = gap;
+      bestIdx = i;
+    }
   }
 
-  const allItems = [];
-  pages.forEach((p, pi) => {
-    p.items.forEach((item) => {
-      if (!item.str || !item.str.trim()) return;
-      allItems.push({
-        str: item.str,
-        transform: item.transform,
-        fontSize: Math.hypot(item.transform[0], item.transform[1]),
-        hasEOL: item.hasEOL,
-        page: pi + 1,
-      });
-    });
-  });
+  if (bestIdx === -1 || bestGap < MIN_GUTTER) return null;
 
-  if (!allItems.length) return [];
+  const gutterX = (sorted[bestIdx - 1].x + sorted[bestIdx].x) / 2;
+  const leftCount = sorted.filter((it) => it.x < gutterX).length;
+  if (leftCount < MIN_CLUSTER || sorted.length - leftCount < MIN_CLUSTER) return null;
 
-  allItems.sort((a, b) => {
-    const pageDiff = a.page - b.page;
-    if (pageDiff !== 0) return pageDiff;
-    const yDiff = b.transform[5] - a.transform[5];
+  return gutterX;
+}
+
+// Groups raw text-run items into visual lines (items sharing a baseline).
+// A known page gutter forces a line break exactly at that boundary, so a
+// sidebar line ending right where the main column starts never fuses with
+// whatever happens to sit at the same height in the main column.
+function groupIntoLines(items, gutterByPage) {
+  const sorted = [...items].sort((a, b) => {
+    if (a.page !== b.page) return a.page - b.page;
+    const yDiff = b.y - a.y;
     if (Math.abs(yDiff) > 5) return yDiff;
-    return a.transform[4] - b.transform[4];
+    return a.x - b.x;
   });
 
-  const fontSizes = allItems.map((i) => i.fontSize);
-  const sizeCounts = new Map();
-  fontSizes.forEach((s) => {
-    const rounded = Math.round(s * 10) / 10;
-    sizeCounts.set(rounded, (sizeCounts.get(rounded) || 0) + 1);
-  });
-  let modalSize = 0;
-  let modalCount = 0;
-  sizeCounts.forEach((count, size) => {
-    if (count > modalCount) {
-      modalCount = count;
-      modalSize = size;
-    }
-  });
+  const lines = [];
+  let current = null;
 
-  const paragraphs = [];
-  let currentParagraph = [];
-  let currentY = null;
+  for (const item of sorted) {
+    const gutterX = gutterByPage.get(item.page) ?? null;
+    const side = gutterX == null ? 0 : item.x < gutterX ? 0 : 1;
 
-  for (const item of allItems) {
-    const y = Math.round(item.transform[5]);
     const sameLine =
-      currentY !== null &&
-      Math.abs(y - currentY) <= item.fontSize * 0.4;
+      current &&
+      current.page === item.page &&
+      current.side === side &&
+      Math.abs(item.y - current.y) <= item.fontSize * 0.4;
 
     if (sameLine) {
-      currentParagraph.push(item);
+      current.items.push(item);
     } else {
-      if (currentParagraph.length > 0) {
-        paragraphs.push([...currentParagraph]);
-      }
-      currentParagraph = [item];
-      currentY = y;
+      if (current) lines.push(finalizeLine(current));
+      current = { items: [item], page: item.page, y: item.y, side };
     }
   }
+  if (current) lines.push(finalizeLine(current));
+  return lines;
+}
 
-  if (currentParagraph.length > 0) {
-    paragraphs.push(currentParagraph);
+function finalizeLine(line) {
+  const items = line.items;
+  const fontSize = Math.round((items[0]?.fontSize || 0) * 10) / 10;
+  const text = items
+    .map((it) => it.str)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    text,
+    fontSize,
+    xLeft: Math.min(...items.map((it) => it.x)),
+    xRight: Math.max(...items.map((it) => it.x + it.width)),
+    y: line.y,
+    page: line.page,
+    side: line.side,
+    itemCount: items.length,
+  };
+}
+
+// A plain top-to-bottom sort corrupts any page with a sidebar or a second
+// column, because their lines share a y-range with the main column and get
+// interleaved with it. This reads one whole column before the other,
+// instead of weaving them together by height — and picks the narrower
+// column as the "aside", since a sidebar/footnote box is narrower than the
+// main text column regardless of which physical side of the page it's on.
+function assignReadingOrder(lines) {
+  const byPage = new Map();
+  for (const line of lines) {
+    if (!byPage.has(line.page)) byPage.set(line.page, []);
+    byPage.get(line.page).push(line);
   }
 
-  const structured = [];
-  let i = 0;
-  while (i < paragraphs.length) {
-    const p = paragraphs[i];
-    const pFontSize = p[0] ? Math.round(p[0].fontSize * 10) / 10 : modalSize;
-    const isHeading = pFontSize > modalSize * 1.18 && p.length <= 12;
+  const ordered = [];
+  const pages = [...byPage.keys()].sort((a, b) => a - b);
 
-    if (isHeading) {
-      structured.push({
-        text: p.map((item) => item.str).join(' ').replace(/\s+/g, ' ').trim(),
-        type: 'heading',
-        page: p[0]?.page || 1,
+  for (const page of pages) {
+    const pageLines = byPage.get(page);
+    const sideA = pageLines.filter((l) => l.side === 0).sort((a, b) => b.y - a.y);
+    const sideB = pageLines.filter((l) => l.side === 1).sort((a, b) => b.y - a.y);
+
+    if (!sideB.length) {
+      sideA.forEach((l) => ordered.push({ ...l, aside: false }));
+      continue;
+    }
+
+    const widthA = median(sideA.map((l) => l.xRight - l.xLeft));
+    const widthB = median(sideB.map((l) => l.xRight - l.xLeft));
+    const [primary, secondary] = widthA >= widthB ? [sideA, sideB] : [sideB, sideA];
+
+    primary.forEach((l) => ordered.push({ ...l, aside: false }));
+    secondary.forEach((l) => ordered.push({ ...l, aside: true }));
+  }
+
+  return ordered;
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function mode(values, precision = 1) {
+  const counts = new Map();
+  for (const v of values) {
+    const key = Math.round(v * precision) / precision;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let bestKey = 0;
+  let bestCount = 0;
+  counts.forEach((count, key) => {
+    if (count > bestCount) {
+      bestCount = count;
+      bestKey = key;
+    }
+  });
+  return bestKey;
+}
+
+// Most common gap between consecutive same-size lines in the same region —
+// the document's single-line-spacing baseline, whatever the PDF's actual
+// leading is.
+function findModalLineGap(lines) {
+  const gaps = [];
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1];
+    const next = lines[i];
+    if (prev.page !== next.page || prev.aside !== next.aside) continue;
+    if (Math.abs(prev.fontSize - next.fontSize) > 0.5) continue;
+    const gap = prev.y - next.y;
+    if (gap > 0 && gap < prev.fontSize * 4) gaps.push(gap);
+  }
+  return gaps.length ? mode(gaps, 2) : null;
+}
+
+// Typical left/right extent of a region's body-text lines, used to detect
+// indentation (new paragraph) and full-width lines (a wrapped line vs. an
+// intentional break). Computed separately for the main text and the aside
+// so a narrow sidebar doesn't skew the main column's margins, or vice versa.
+function bodyEdges(lines, modalFontSize) {
+  return {
+    left: findEdge(lines, modalFontSize, (l) => l.xLeft, 1),
+    right: findEdge(lines, modalFontSize, (l) => l.xRight, 1, 0.75),
+  };
+}
+
+function findEdge(lines, modalFontSize, accessor, precision, percentile = 0.5) {
+  const values = lines
+    .filter((l) => Math.abs(l.fontSize - modalFontSize) <= 0.5)
+    .map(accessor);
+  if (!values.length) return null;
+  if (percentile === 0.5) return mode(values, precision);
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * percentile));
+  return sorted[idx];
+}
+
+// A bare number or punctuation fragment (a stray table cell value, a page
+// number) should never register as a heading, no matter its font size.
+function looksLikeHeadingText(text) {
+  return /\p{L}/u.test(text);
+}
+
+function isHeadingLine(line, modalFontSize) {
+  return (
+    line.fontSize > modalFontSize * 1.18 &&
+    line.itemCount <= 12 &&
+    looksLikeHeadingText(line.text)
+  );
+}
+
+// Section numbering ("1.", "2.1.", "3.2.1.") is a far more reliable heading
+// signal than font size — many academic PDFs style numbered headers at body
+// size, and this also recovers the document's real nesting depth. Capped at
+// 2 digits per segment so it can't mistake a 4-digit year or a footnote
+// marker glued to the next word (no period) for a heading.
+const HEADING_TYPES_BY_DEPTH = { 1: 'heading', 2: 'subheading', 3: 'subheading2' };
+
+function detectNumberedHeading(text) {
+  const match = text.match(/^(\d{1,2}(?:\.\d{1,2}){0,2})\.\s+(.{2,140})$/);
+  if (!match) return null;
+  const depth = match[1].split('.').length;
+  const type = HEADING_TYPES_BY_DEPTH[depth];
+  if (!type) return null;
+  return { type, text: `${match[1]}. ${match[2]}` };
+}
+
+// Walks the line list, fusing wrapped prose lines into flowing paragraphs
+// while keeping intentional line breaks (verse/poetry) intact.
+function buildBlocks(lines, ctx) {
+  const { modalFontSize, modalLineGap, edges } = ctx;
+  const blocks = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.text) {
+      i++;
+      continue;
+    }
+
+    const numbered = detectNumberedHeading(line.text);
+    if (numbered || isHeadingLine(line, modalFontSize)) {
+      blocks.push({
+        text: numbered ? numbered.text : line.text,
+        type: numbered ? numbered.type : 'heading',
+        page: line.page,
+        aside: line.aside,
       });
       i++;
       continue;
     }
 
-    const paragraphItems = [...p];
+    const run = [line];
+    const joins = [];
     let j = i + 1;
-    while (j < paragraphs.length) {
-      const nextP = paragraphs[j];
-      const nextFontSize = nextP[0] ? Math.round(nextP[0].fontSize * 10) / 10 : modalSize;
-      const nextIsHeading = nextFontSize > modalSize * 1.18 && nextP.length <= 12;
-      if (nextIsHeading) break;
 
-      const lastItem = paragraphItems[paragraphItems.length - 1];
-      const firstItem = nextP[0];
-      const lastY = Math.round(lastItem.transform[5]);
-      const firstY = Math.round(firstItem.transform[5]);
-      const lastFontSize = Math.round(lastItem.fontSize * 10) / 10;
-      const firstFontSize = Math.round(firstItem.fontSize * 10) / 10;
-      const verticalGap = Math.abs(lastY - firstY);
-      const expectedGap = (lastFontSize + firstFontSize) / 2 * 1.1;
-
-      if (
-        Math.abs(lastFontSize - firstFontSize) <= 0.5 &&
-        verticalGap <= expectedGap &&
-        verticalGap > 0
-      ) {
-        paragraphItems.push(...nextP);
+    while (j < lines.length) {
+      const next = lines[j];
+      if (!next.text) {
         j++;
-      } else {
-        break;
+        continue;
       }
+      if (isHeadingLine(next, modalFontSize) || detectNumberedHeading(next.text)) break;
+
+      const prev = run[run.length - 1];
+      const sameSize = Math.abs(prev.fontSize - next.fontSize) <= 0.5;
+      const sameRegion = prev.aside === next.aside;
+      const gap = prev.page === next.page && sameRegion ? prev.y - next.y : null;
+      if (!sameSize || gap === null || gap <= 0) break;
+
+      const gapRef = modalLineGap || prev.fontSize * 1.2;
+      if (gap > gapRef * 1.6) break; // blank line — paragraph/stanza break
+
+      const bodyEdge = (next.aside ? edges.aside : edges.primary) || {};
+      const isIndented =
+        bodyEdge.left != null && next.xLeft > bodyEdge.left + next.fontSize * 0.6;
+      if (isIndented) break; // new paragraph start, no blank line needed
+
+      const reachesMargin =
+        bodyEdge.right != null && prev.xRight >= bodyEdge.right - prev.fontSize * 3;
+
+      const isHyphenBreak =
+        reachesMargin && /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(next.text);
+
+      joins.push(isHyphenBreak ? 'hyphen' : reachesMargin ? 'space' : 'break');
+      run.push(next);
+      j++;
     }
 
-    const text = paragraphItems
-      .map((item) => item.str)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    // Undo the PDF's own end-of-line hyphenation ("documen-" + "tada" ->
+    // "documentada") instead of leaving the hyphen and a space in reflowed text.
+    const text = run.reduce((acc, ln, idx) => {
+      if (idx === 0) return ln.text;
+      const join = joins[idx - 1];
+      if (join === 'hyphen') return acc.slice(0, -1) + ln.text;
+      return acc + (join === 'break' ? '\n' : ' ') + ln.text;
+    }, '');
+
+    // A single trailing short line (e.g. a "Keywords:" line after an
+    // abstract) shouldn't flip an otherwise-flowing paragraph into verse —
+    // only treat it as verse when line breaks are the dominant pattern.
+    const breakRatio = joins.length ? joins.filter((j) => j === 'break').length / joins.length : 0;
+    const isVerse = breakRatio >= 0.4;
+    const isSub =
+      !isVerse &&
+      run.length === 1 &&
+      run[0].fontSize < modalFontSize * 0.97 &&
+      run[0].itemCount <= 10 &&
+      looksLikeHeadingText(run[0].text);
 
     if (text) {
-      const isSub = pFontSize < modalSize * 0.97 && paragraphItems.length <= 10;
-      structured.push({
+      blocks.push({
         text,
-        type: isSub ? 'subheading' : 'paragraph',
-        page: paragraphItems[0]?.page || 1,
+        type: isVerse ? 'verse' : isSub ? 'subheading' : 'paragraph',
+        page: run[0].page,
+        aside: run[0].aside,
       });
     }
 
     i = j;
   }
 
-  return structured;
+  return blocks;
 }

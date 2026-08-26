@@ -301,6 +301,7 @@
 /* First paragraph or paragraph after heading: no indent */
 .doc-heading + .doc-paragraph,
 .doc-subheading + .doc-paragraph,
+.doc-subheading2 + .doc-paragraph,
 .document > .doc-paragraph:first-child {
   text-indent: 0;
 }
@@ -330,6 +331,50 @@
   text-indent: 0;
   margin-top: 1.5em;
   margin-bottom: 0.4em;
+}
+
+/* Third heading tier (e.g. "3.2.1.") — a touch of left padding conveys the
+   nesting under its parent section without needing a rigid layout. */
+.doc-subheading2 {
+  font-family: var(--heading);
+  font-weight: 600;
+  color: var(--text-h);
+  opacity: 0.9;
+  line-height: 1.4;
+  text-align: left;
+  text-indent: 0;
+  padding-left: 0.9em;
+  margin-top: 1.2em;
+  margin-bottom: 0.3em;
+}
+
+.doc-verse {
+  text-indent: 0;
+  white-space: pre-line;
+  -webkit-hyphens: none;
+  hyphens: none;
+  margin-bottom: 1.2em;
+}
+
+.doc-verse:last-child {
+  margin-bottom: 0;
+}
+
+/* Content that lived in a sidebar/footnote column in the PDF (author
+   contact info, callouts) — shown as a distinct boxed note instead of a
+   second column, since a real side-by-side layout doesn't fit a phone. */
+.doc-aside {
+  text-indent: 0;
+  color: var(--text);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 0 0 0.8em;
+}
+
+.doc-aside:last-child {
+  margin-bottom: 0;
 }
 
 .doc-paragraph.search-match {
@@ -705,6 +750,12 @@
 .toc-item--subheading {
   padding-left: 36px;
   font-size: 13px;
+}
+
+.toc-item--subheading2 {
+  padding-left: 52px;
+  font-size: 12px;
+  opacity: 0.85;
 }
 
 .toc-page {
