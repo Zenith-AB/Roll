@@ -128,15 +128,15 @@
   justify-content: center;
   gap: 12px;
   padding: 10px 16px;
-  background: var(--bg-secondary, #1e1e2e);
-  border-bottom: 1px solid var(--border, #333);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 
 .font-btn {
-  background: var(--bg, #111);
-  color: var(--text-h, #fff);
-  border: 1px solid var(--border, #444);
+  background: var(--bg);
+  color: var(--text-h);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 14px;
   font-size: 14px;
@@ -147,7 +147,7 @@
 }
 
 .font-btn:hover:not(:disabled) {
-  background: var(--accent, #646cff);
+  background: var(--accent);
   color: white;
   transform: scale(1.05);
 }
@@ -158,7 +158,7 @@
 }
 
 .font-label {
-  color: var(--text-h, #fff);
+  color: var(--text-h);
   font-size: 14px;
   font-weight: 500;
   min-width: 40px;
@@ -173,22 +173,6 @@
   background: white;
   min-height: 100vh;
   box-shadow: 0 0 20px rgba(0,0,0,0.5);
-}
-
-.webtoon-canvas {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  vertical-align: top;
-  border: none;
-  opacity: 0;
-  transition: opacity 0.5s ease-in;
-}
-
-.webtoon-canvas.fade-in {
-  opacity: 1;
 }
 
 /* Text Layer for highlighting */
@@ -252,7 +236,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background-color: var(--accent, #646cff);
+  background-color: var(--accent);
   color: white;
   border: none;
   border-radius: 50px;
@@ -266,7 +250,7 @@
 
 .download-button:hover:not(:disabled) {
   transform: translateY(-2px);
-  background-color: #747bff;
+  background-color: var(--accent-hover);
 }
 
 .download-button:disabled {
@@ -345,8 +329,8 @@
 }
 
 .highlight-popover {
-  background: var(--bg-secondary, #1e1e2e);
-  border: 1px solid var(--border, #444);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px;
   width: 280px;
@@ -362,7 +346,7 @@
   gap: 8px;
   font-weight: 600;
   font-size: 14px;
-  color: var(--text-h, #fff);
+  color: var(--text-h);
 }
 
 .highlight-popover-dot {
@@ -394,9 +378,9 @@
   width: 100%;
   padding: 10px;
   border-radius: 8px;
-  border: 1px solid var(--border, #444);
-  background: var(--bg, #111);
-  color: var(--text-h, #fff);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
   font-family: inherit;
   font-size: 13px;
   resize: vertical;
@@ -406,11 +390,11 @@
 
 .highlight-popover-textarea:focus {
   outline: none;
-  border-color: var(--accent, #646cff);
+  border-color: var(--accent);
 }
 
 .highlight-popover-textarea::placeholder {
-  color: var(--text, #888);
+  color: var(--text);
 }
 
 .highlight-popover-actions {
@@ -420,7 +404,7 @@
 
 .highlight-popover-done {
   padding: 6px 16px;
-  background: var(--accent, #646cff);
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
@@ -431,7 +415,7 @@
 }
 
 .highlight-popover-done:hover {
-  background: var(--accent-hover, #747bff);
+  background: var(--accent-hover);
 }
 
 @media (max-width: 768px) {

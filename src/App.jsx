@@ -37,13 +37,20 @@ const COLORS = [
   { id: 'blue', label: 'Azul', css: 'rgba(0, 180, 255, 0.35)', pdf: rgb(0, 0.7, 1) },
 ];
 
+const COLORS_SOLID = [
+  'rgba(255, 255, 0, 0.8)',
+  'rgba(0, 255, 0, 0.8)',
+  'rgba(255, 105, 180, 0.8)',
+  'rgba(0, 180, 255, 0.8)',
+];
+
 const FONT_SIZES = [0.6, 0.75, 0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
 
 function App() {
   const [pdf, setPdf] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const [rawPdfBuffer, setRawPdfBuffer] = useState(null);
+  const rawPdfBufferRef = useRef(null);
   const [isConverting, setIsConverting] = useState(false);
   const [highlights, setHighlights] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
@@ -52,6 +59,7 @@ function App() {
   const fontScale = FONT_SIZES[fontSizeIndex];
   const scrollContainerRef = useRef(null);
   const prevFontScaleRef = useRef(fontScale);
+  const highlightIdCounter = useRef(0);
 
   useEffect(() => {
     if (!scrollContainerRef.current) return;
@@ -67,7 +75,7 @@ function App() {
     if (!file || file.type !== 'application/pdf') return;
     try {
       const arrayBuffer = await file.arrayBuffer();
-      setRawPdfBuffer(arrayBuffer.slice(0));
+      rawPdfBufferRef.current = arrayBuffer.slice(0);
       const loadedPdf = await pdfjsLib.getDocument({
         data: arrayBuffer,
         cMapUrl: `${import.meta.env.BASE_URL}cmaps/`,
@@ -82,10 +90,11 @@ function App() {
   }, []);
 
   const handleDownload = async () => {
-    if (!rawPdfBuffer) return;
+    if (!rawPdfBufferRef.current) return;
     setIsConverting(true);
+    let url = null;
     try {
-      const srcDoc = await PDFDocument.load(rawPdfBuffer);
+      const srcDoc = await PDFDocument.load(rawPdfBufferRef.current);
       const pages = srcDoc.getPages();
       const newPdf = await PDFDocument.create();
 
@@ -164,18 +173,19 @@ function App() {
 
       const pdfBytes = await newPdf.save();
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'documento_rollo.pdf';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     } catch (e) {
       console.error("Error converting PDF:", e);
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+      setIsConverting(false);
     }
-    setIsConverting(false);
   };
 
   const handleFileUpload = (event) => {
@@ -203,7 +213,6 @@ function App() {
   const handleAddHighlight = (colorObj) => {
     if (!contextMenu) return;
     const { selectionData } = contextMenu;
-    const newId = Date.now().toString();
 
     setHighlights(prev => {
       const filteredPrev = prev.filter(hl => {
@@ -223,7 +232,7 @@ function App() {
       });
 
       return [...filteredPrev, {
-        id: newId,
+        id: `hl-${++highlightIdCounter.current}`,
         pageIndex: selectionData.pageIndex,
         rects: selectionData.rects,
         colorObj: colorObj,
@@ -334,7 +343,6 @@ function App() {
         </div>
       )}
 
-      {/* Context Menu — positioned above selection */}
       {contextMenu && (
         <div
           className="context-menu"
@@ -342,19 +350,19 @@ function App() {
             position: 'fixed',
             top: contextMenu.y,
             left: Math.min(contextMenu.x, window.innerWidth - 180),
-            transform: 'translateY(-100%)',
+            transform: contextMenu.preferBelow ? 'none' : 'translateY(-100%)',
             zIndex: 9999,
           }}
         >
           <div className="context-menu-title">Subrayar</div>
           <div className="context-menu-colors">
-            {COLORS.map(c => (
+            {COLORS.map((c, i) => (
               <button
                 key={c.id}
                 title={c.label}
                 onClick={() => handleAddHighlight(c)}
                 className="color-btn"
-                style={{ background: c.css.replace('0.35', '0.8') }}
+                style={{ background: COLORS_SOLID[i] }}
               />
             ))}
           </div>
@@ -362,15 +370,15 @@ function App() {
         </div>
       )}
 
-      {/* Highlight editing popover */}
       {editingHighlight && (() => {
         const hl = highlights.find(h => h.id === editingHighlight);
         if (!hl) return null;
+        const colorIdx = COLORS.findIndex(c => c.id === hl.colorObj.id);
         return (
           <div className="highlight-popover-overlay" onClick={() => setEditingHighlight(null)}>
             <div className="highlight-popover" onClick={e => e.stopPropagation()}>
               <div className="highlight-popover-header">
-                <span className="highlight-popover-dot" style={{ background: hl.colorObj.css.replace('0.35', '0.8') }} />
+                <span className="highlight-popover-dot" style={{ background: colorIdx >= 0 ? COLORS_SOLID[colorIdx] : hl.colorObj.css }} />
                 <span>Subrayado</span>
                 <button className="highlight-popover-close" onClick={() => handleDeleteHighlight(hl.id)} title="Eliminar subrayado">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -466,7 +474,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
   const textLayerRef = useRef(null);
   const [isVisible, setIsVisible] = useState(false);
   const [currentScale, setCurrentScale] = useState(1);
-  const [chunksInfo, setChunksInfo] = useState({ chunks: [], totalHeight: 0, width: 0 });
+  const [chunksInfo, setChunksInfo] = useState({ chunks: [], totalHeight: 0, width: 0, renderScale: 2 });
   const pressTimer = useRef(null);
   const touchEndTimer = useRef(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
@@ -569,6 +577,14 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
         const viewHeight = viewport.height;
         const MARGIN_RATIO = 0.06;
 
+        const itemPositions = textContent.items.map(item => {
+          if (!item.str.trim()) return null;
+          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+          const fontHeight = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3]));
+          const y = tx[5] - fontHeight;
+          return { item, tx, fontHeight, y };
+        }).filter(Boolean);
+
         const isPageNumber = (item, y, itemFontHeight) => {
           const trimmed = item.str.trim();
           if (!trimmed) return false;
@@ -582,11 +598,9 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
             const nearTop = y < viewHeight * 0.15;
             const nearBottom = y + itemFontHeight > viewHeight * 0.85;
             if (nearTop || nearBottom) {
-              const nearby = textContent.items.filter(other => {
-                if (other === item) return false;
-                const otherTx = pdfjsLib.Util.transform(viewport.transform, other.transform);
-                const otherY = otherTx[5] - Math.sqrt(otherTx[2] ** 2 + otherTx[3] ** 2);
-                return Math.abs(otherY - y) < itemFontHeight * 1.5 && other.str.trim().length > 0;
+              const nearby = itemPositions.filter(other => {
+                if (other.item === item) return false;
+                return Math.abs(other.y - y) < itemFontHeight * 1.5 && other.item.str.trim().length > 0;
               });
               if (nearby.length === 0) return true;
             }
@@ -594,12 +608,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
           return false;
         };
 
-        textContent.items.forEach(item => {
-          if (!item.str.trim()) return;
-          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-          const fontHeight = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3]));
-          const originalTop = tx[5] - fontHeight;
-
+        itemPositions.forEach(({ item, tx, fontHeight, y: originalTop }) => {
           if (isPageNumber(item, originalTop, fontHeight)) return;
 
           let mappedTop = -9999;
@@ -655,7 +664,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
     };
   }, [pdf, pageNumber, isNearViewport]);
 
-  const openContextMenu = (_clientX, _clientY) => {
+  const openContextMenu = () => {
     const selection = window.getSelection();
     if (selection.rangeCount === 0 || selection.isCollapsed) return;
 
@@ -663,6 +672,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
     const containerRect = textLayerRef.current.getBoundingClientRect();
     const rects = [];
     const spans = textLayerRef.current.querySelectorAll('span');
+    const renderScale = chunksInfo.renderScale;
 
     for (const span of spans) {
       if (!selection.containsNode(span, true)) continue;
@@ -699,11 +709,11 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
             }
 
             rects.push({
-              x: unscaledX / 2.0,
-              y: pdfY / 2.0,
-              width: (r.width / currentScale) / 2.0,
-              height: (r.height / currentScale) / 2.0,
-              displayY: unscaledY / 2.0
+              x: unscaledX / renderScale,
+              y: pdfY / renderScale,
+              width: (r.width / currentScale) / renderScale,
+              height: (r.height / currentScale) / renderScale,
+              displayY: unscaledY / renderScale
             });
           }
         }
@@ -714,10 +724,12 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
 
     if (rects.length > 0) {
       const selectionRect = range.getBoundingClientRect();
-      const menuY = selectionRect.top - 8;
+      const preferBelow = selectionRect.top < 120;
+      const menuY = preferBelow ? selectionRect.bottom + 8 : selectionRect.top - 8;
       setContextMenu({
         x: selectionRect.left + selectionRect.width / 2,
         y: menuY,
+        preferBelow,
         selectionData: { pageIndex: pageNumber - 1, rects }
       });
     }
@@ -725,10 +737,10 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
 
   const handleContextMenu = (e) => {
     e.preventDefault();
-    openContextMenu(e.clientX, e.clientY);
+    openContextMenu();
   };
 
-  const handleTouchEnd = (_e) => {
+  const handleTouchEnd = () => {
     if (pressTimer.current) {
       clearTimeout(pressTimer.current);
       pressTimer.current = null;
@@ -739,11 +751,7 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       touchEndTimer.current = null;
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim()) {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top - 8;
-        openContextMenu(x, y);
+        openContextMenu();
       }
     }, isIOS ? 400 : 0);
   };
@@ -758,6 +766,8 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       touchEndTimer.current = null;
     }
   };
+
+  const rs = chunksInfo.renderScale;
 
   return (
     <div
@@ -817,8 +827,8 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
                   }}
                   style={{
                     position: 'absolute',
-                    left: `${r.x * 2.0}px`, top: `${r.displayY * 2.0}px`,
-                    width: `${r.width * 2.0}px`, height: `${r.height * 2.0}px`,
+                    left: `${r.x * rs}px`, top: `${r.displayY * rs}px`,
+                    width: `${r.width * rs}px`, height: `${r.height * rs}px`,
                     backgroundColor: hl.colorObj.css,
                     pointerEvents: 'auto', cursor: 'pointer',
                     mixBlendMode: 'multiply'
