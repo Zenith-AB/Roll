@@ -96,10 +96,9 @@ function App() {
       for (let i = 0; i < pages.length; i++) {
         const p = pages[i];
         const pdfjsPage = await pdf.getPage(i + 1);
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
-        let renderScale = (isMobile ? 1.5 : 2.0) * fontScale;
+        let renderScale = (window.innerWidth / pdfjsPage.getViewport({ scale: 1 }).width) * 2;
         let renderViewport = pdfjsPage.getViewport({ scale: renderScale });
-        const MAX_AREA = isMobile ? 3000000 : 10000000;
+        const MAX_AREA = 10000000;
         if (renderViewport.width * renderViewport.height > MAX_AREA) {
           renderScale = Math.sqrt(MAX_AREA / (renderViewport.width * renderViewport.height / (renderScale * renderScale)));
           renderViewport = pdfjsPage.getViewport({ scale: renderScale });
@@ -319,7 +318,6 @@ function App() {
             className="pdf-viewer"
             style={{
               width: `${100 * fontScale}%`,
-              maxWidth: `${800 * fontScale}px`,
             }}
           >
             {Array.from(new Array(numPages), (el, index) => (
@@ -330,7 +328,6 @@ function App() {
                 highlights={highlightsByPage.get(index) || []}
                 setContextMenu={setContextMenu}
                 setEditingHighlight={setEditingHighlight}
-                fontScale={fontScale}
               />
             ))}
           </div>
@@ -463,7 +460,7 @@ function findContentChunks(canvas, renderScale = 2.0) {
   return validChunks.length > 0 ? validChunks : chunks;
 }
 
-const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextMenu, setEditingHighlight, fontScale }) {
+const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextMenu, setEditingHighlight }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
@@ -511,10 +508,10 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
         const page = loadedPage;
         if (!isMounted) return;
 
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
-        let renderScale = (isMobile ? 1.5 : 2.0) * fontScale;
+        const containerWidth = containerRef.current?.clientWidth || window.innerWidth;
+        let renderScale = (containerWidth / page.getViewport({ scale: 1 }).width) * 2;
         let viewport = page.getViewport({ scale: renderScale });
-        const MAX_AREA = isMobile ? 3000000 : 10000000;
+        const MAX_AREA = 10000000;
         if (viewport.width * viewport.height > MAX_AREA) {
           renderScale = Math.sqrt(MAX_AREA / (viewport.width * viewport.height / (renderScale * renderScale)));
           viewport = page.getViewport({ scale: renderScale });
@@ -656,7 +653,6 @@ const PdfPage = memo(function PdfPage({ pdf, pageNumber, highlights, setContextM
       if (resizeObserver) resizeObserver.disconnect();
       if (loadedPage) loadedPage.cleanup();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontScale intentionally excluded: PDF renders once, zoom is CSS-only
   }, [pdf, pageNumber, isNearViewport]);
 
   const openContextMenu = (_clientX, _clientY) => {
