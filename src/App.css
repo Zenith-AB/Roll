@@ -319,6 +319,11 @@
   text-indent: 1.5em;
 }
 
+/* Too little text to justify: see Paragraph.jsx. */
+.doc-paragraph--short {
+  text-align: left;
+}
+
 /* First paragraph or paragraph after heading: no indent */
 .doc-heading + .doc-paragraph,
 .doc-subheading + .doc-paragraph,
@@ -1281,5 +1286,564 @@
     padding: 8px 16px;
     gap: 12px;
     font-size: 11px;
+  }
+}
+
+/* ── Figures ──────────────────────────────────────────────────────────────
+
+   Illustrations are re-rendered from the PDF's own drawing operations, which
+   assume white paper. Each one therefore keeps its own white sheet and reads as
+   a card, so line art stays visible in the dark and sepia themes instead of
+   disappearing into the background. */
+
+.doc-figure {
+  margin: 1.7em 0;
+}
+
+.doc-figure-frame {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+  cursor: zoom-in;
+  position: relative;
+  overflow: hidden;
+  /* A tap on a figure should open it, not select the paragraph around it. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.doc-figure-frame:hover,
+.doc-figure-frame:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  outline: none;
+}
+
+.doc-figure-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.doc-figure-hint {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(17, 17, 17, 0.62);
+  color: #ffffff;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
+
+.doc-figure-hint svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* On a mouse the affordance only needs to appear when the pointer is over the
+   figure; on a touch screen there is no hover, so it stays put. */
+@media (hover: hover) and (pointer: fine) {
+  .doc-figure-hint {
+    opacity: 0;
+  }
+  .doc-figure-frame:hover .doc-figure-hint,
+  .doc-figure-frame:focus-visible .doc-figure-hint {
+    opacity: 0.9;
+  }
+}
+
+/* ── Captions ── */
+
+.doc-figcaption,
+.doc-caption {
+  display: block;
+  text-indent: 0;
+  text-align: left;
+  color: var(--text);
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+/* A caption that never found its figure still reads as a caption rather than
+   as a stray sentence in the middle of the prose. */
+.doc-caption {
+  margin: 0.8em 0 1.2em;
+}
+
+/* ── Footnotes and editor's notes ── */
+
+.doc-note {
+  display: block;
+  text-indent: 0;
+  text-align: left;
+  white-space: pre-line;
+  color: var(--text);
+  opacity: 0.92;
+  margin: 1em 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px dotted var(--border);
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+/* ── Comments the author left inside the PDF ── */
+
+.doc-comment {
+  margin: 1.3em 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  /* Tinted from the live accent so the box follows the theme; the flat
+     fallback is for engines without color-mix (Safari below 16.2). */
+  background: var(--accent-bg);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.doc-comment-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.doc-comment-kind {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.doc-comment-author {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.doc-comment-date {
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.doc-comment-body {
+  text-indent: 0;
+  text-align: left;
+  white-space: pre-line;
+  margin: 0;
+  color: var(--text-h);
+}
+
+/* ── Tables ───────────────────────────────────────────────────────────────
+
+   A table that has been resolved into a real grid. It scrolls inside its own
+   box: the page itself must never scroll sideways, or a wide table drags the
+   whole document off the edge of a phone screen. */
+
+.doc-table-figure {
+  margin: 1.5em 0;
+}
+
+.doc-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Keeps a swipe along the table from turning into the browser's
+     back-navigation gesture on Android and iOS. */
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.doc-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.doc-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-indent: 0;
+  color: var(--text-h);
+  -webkit-hyphens: none;
+  hyphens: none;
+  /* Where there is room, let the browser size the columns by their content: a
+     week number does not need the same width as a sentence. The floor keeps a
+     column from collapsing to a couple of letters. */
+  table-layout: auto;
+  min-width: calc(var(--doc-cols, 3) * 7.5em);
+}
+
+/* A table is not prose and has no reason to obey the reading measure. Beyond
+   the point where the window is wider than that measure, a wide table spreads
+   into the space instead of wrapping every cell to three letters a line —
+   capped so it never runs past the window, and centred on the column it came
+   from. */
+@media (min-width: 900px) {
+  .doc-table-figure {
+    width: min(96vw, max(100%, calc(var(--doc-cols, 3) * 11em)));
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+}
+
+/* A <caption> must keep `display: table-caption`; giving it the figure-caption
+   class instead turned it into a block box that landed *inside* the table,
+   between the header row and the data. */
+.doc-data-table caption {
+  caption-side: top;
+  text-align: left;
+  margin: 0;
+  padding: 10px 14px 12px;
+  color: var(--text);
+  font-size: 0.94em;
+  line-height: 1.5;
+}
+
+.doc-data-table th,
+.doc-data-table td {
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  /* Only breaks a token that genuinely cannot fit — `word-break: break-word`
+     would chop ordinary words mid-syllable in a narrow column. */
+  overflow-wrap: break-word;
+}
+
+.doc-data-table tbody tr:last-child th,
+.doc-data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.doc-data-table thead th {
+  font-weight: 600;
+  color: var(--text-h);
+  background: var(--bg-tertiary);
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+/* The row label stays visible while the rest of a wide table scrolls past it —
+   without it, a phone reader loses track of which row they are reading. */
+.doc-data-table th[scope='row'] {
+  position: sticky;
+  left: 0;
+  font-weight: 600;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+}
+
+.doc-data-table td.is-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.doc-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 2px 0;
+}
+
+.doc-table-hint {
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.doc-table-toggle {
+  margin-left: auto;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-h);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.doc-table-toggle:hover,
+.doc-table-toggle:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ── Wide tables as cards ─────────────────────────────────────────────────
+
+   A four-column table on a 366px phone is 450px wide and two thousand pixels
+   tall: the reader scrolls sideways to find a value and then cannot tell which
+   column it came from. Turning each row into a card, with every value carrying
+   its column's name, removes the sideways scroll entirely.
+
+   This is done in CSS on the same markup — the cells keep their roles, and the
+   labels come from `data-label` rather than from duplicated text — so the table
+   is still a table to a screen reader, to copy-and-paste and to print. */
+
+.doc-table-figure--cards .doc-table-scroll {
+  overflow: visible;
+  border: none;
+  background: none;
+}
+
+.doc-table-figure--cards .doc-data-table {
+  display: block;
+  min-width: 0;
+  table-layout: auto;
+}
+
+.doc-table-figure--cards .doc-data-table caption {
+  display: block;
+  padding: 0 2px 10px;
+}
+
+/* The header row's job is done by the per-value labels; keeping it on screen
+   would repeat every column name twice. It stays in the DOM for assistive
+   technology rather than being removed. */
+.doc-table-figure--cards .doc-data-table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.doc-table-figure--cards .doc-data-table tbody {
+  display: block;
+}
+
+.doc-table-figure--cards .doc-data-table tbody tr {
+  display: block;
+  margin: 0 0 10px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.doc-table-figure--cards .doc-data-table tbody tr:last-child {
+  margin-bottom: 0;
+}
+
+.doc-table-figure--cards .doc-data-table td,
+.doc-table-figure--cards .doc-data-table th {
+  display: grid;
+  grid-template-columns: minmax(5.5em, 38%) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 14px;
+  border: none;
+  text-align: left;
+  position: static;
+  background: none;
+  white-space: normal;
+}
+
+.doc-table-figure--cards .doc-data-table td::before,
+.doc-table-figure--cards .doc-data-table th::before {
+  content: attr(data-label);
+  color: var(--text);
+  opacity: 0.75;
+  font-size: 0.86em;
+  line-height: 1.5;
+}
+
+/* An empty cell in a card is just a label pointing at nothing. */
+.doc-table-figure--cards .doc-data-table td:empty,
+.doc-table-figure--cards .doc-data-table th:empty {
+  display: none;
+}
+
+.doc-table-figure--cards .doc-data-table td.is-numeric {
+  text-align: left;
+}
+
+/* No header row means no names to label the values with, so the cards stack
+   the values plainly and lean on the first one as the row's title. */
+.doc-table-figure--unlabelled .doc-data-table td,
+.doc-table-figure--unlabelled .doc-data-table th {
+  display: block;
+  padding: 3px 14px;
+}
+
+.doc-table-figure--unlabelled .doc-data-table td::before,
+.doc-table-figure--unlabelled .doc-data-table th::before {
+  content: none;
+}
+
+.doc-table-figure--unlabelled .doc-data-table tr > :first-child {
+  padding-top: 8px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.doc-table-figure--unlabelled .doc-data-table tr > :last-child {
+  padding-bottom: 8px;
+}
+
+.doc-table-raw-wrap {
+  display: block;
+}
+
+/* ── Full-screen figure viewer ── */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 8, 10, 0.97);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* The stage handles its own gestures; letting the browser scroll or zoom the
+     page underneath at the same time makes the pinch fight itself. */
+  overscroll-behavior: contain;
+}
+
+.lightbox-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  cursor: zoom-in;
+}
+
+.lightbox-stage.is-zoomed {
+  cursor: grab;
+}
+
+.lightbox-stage.is-zoomed:active {
+  cursor: grabbing;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  background: #ffffff;
+  border-radius: 6px;
+  transform-origin: center center;
+  will-change: transform;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: 12px;
+  z-index: 1;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.lightbox-bar {
+  flex: none;
+  padding: 12px 18px 16px;
+  color: #e5e7eb;
+  text-align: center;
+}
+
+.lightbox-caption {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 4.5em;
+  overflow-y: auto;
+}
+
+.lightbox-caption--muted {
+  opacity: 0.6;
+}
+
+.lightbox-hint {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+/* ── Extraction progress ── */
+
+.loading-bar {
+  width: min(240px, 60vw);
+  height: 4px;
+  margin-top: 14px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.loading-detail {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+@media (max-width: 768px) {
+  .doc-figure,
+  .doc-table-figure {
+    /* Figures and tables use the full text measure on a phone: the reading
+       gutter is already tight, and a picture inset further is unreadable. */
+    margin-left: -4px;
+    margin-right: -4px;
+  }
+
+  .doc-data-table {
+    /* On a phone there is no room to let one long cell take the width, so the
+       columns are divided evenly and everything wraps. Tables of three columns
+       or more have usually become cards by this point anyway. */
+    table-layout: fixed;
+  }
+
+  .doc-data-table th,
+  .doc-data-table td {
+    padding: 8px 10px;
   }
 }

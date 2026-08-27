@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useDocument } from './context/DocumentContext';
 import { useHighlights } from './context/HighlightsContext';
 import { useSettings } from './context/SettingsContext';
-import { useIsMobile } from './hooks/useIsMobile';
 import { getSelectionOffsets, getSelectedParagraphIndex } from './utils/selection';
 
 import Header from './components/Header';
@@ -10,6 +9,10 @@ import UploadScreen from './components/UploadScreen';
 import LoadingScreen from './components/LoadingScreen';
 import ReadingProgress from './components/ReadingProgress';
 import Paragraph from './components/Paragraph';
+import DocFigure from './components/DocFigure';
+import DocTable from './components/DocTable';
+import DocComment from './components/DocComment';
+import ImageLightbox from './components/ImageLightbox';
 import HighlightMenu from './components/HighlightMenu';
 import NoteEditor from './components/NoteEditor';
 import TableOfContents from './components/TableOfContents';
@@ -21,10 +24,18 @@ import ToolbarBottom from './components/ToolbarBottom';
 import './App.css';
 
 function AppContent() {
-  const isMobile = useIsMobile();
   const articleRef = useRef(null);
 
-  const { docContent, fileName, isExtracting, estimatedReadingTime, totalPages, wordCount } = useDocument();
+  const {
+    docContent,
+    isExtracting,
+    estimatedReadingTime,
+    totalPages,
+    wordCount,
+    figureCount,
+    tableCount,
+    commentCount,
+  } = useDocument();
   const { highlights, addHighlight } = useHighlights();
   const { settings } = useSettings();
 
@@ -38,7 +49,8 @@ function AppContent() {
   const [menuPosition, setMenuPosition] = useState(null);
   const [selectionData, setSelectionData] = useState(null);
   const [editingHighlightId, setEditingHighlightId] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery] = useState('');
+  const [lightboxFigure, setLightboxFigure] = useState(null);
 
   // Refs for selection handling
   const debounceRef = useRef(null);
@@ -85,6 +97,13 @@ function AppContent() {
 
         const paragraphIndex = getSelectedParagraphIndex(articleRef.current);
         if (paragraphIndex === null) return;
+
+        // A table's cells are laid out as a grid, so a character offset into
+        // the block's flat text does not describe any range the reader could
+        // see highlighted. Selecting and copying still work; only the marker
+        // is withheld, which is better than storing a highlight that will
+        // reappear over the wrong cells.
+        if (docContent[paragraphIndex]?.type === 'table') return;
 
         const paraEl = articleRef.current.querySelector(`[data-idx="${paragraphIndex}"]`);
         if (!paraEl) return;
@@ -203,6 +222,36 @@ function AppContent() {
     [settings.fontSize]
   );
 
+  // Captions, footnotes, table cells and author comments are all secondary to
+  // the running text, and each is set a little smaller and always ragged-right:
+  // justification needs a full measure to look like anything, and none of these
+  // has one.
+  const captionStyles = useMemo(
+    () => ({
+      fontSize: `${Math.round(settings.fontSize * 0.9)}px`,
+      lineHeight: 1.5,
+      textAlign: 'left',
+    }),
+    [settings.fontSize]
+  );
+
+  const noteStyles = useMemo(
+    () => ({
+      fontSize: `${Math.round(settings.fontSize * 0.85)}px`,
+      lineHeight: 1.55,
+      textAlign: 'left',
+    }),
+    [settings.fontSize]
+  );
+
+  const tableStyles = useMemo(
+    () => ({
+      fontSize: `${Math.round(settings.fontSize * 0.86)}px`,
+      lineHeight: 1.4,
+    }),
+    [settings.fontSize]
+  );
+
   return (
     <div className="app">
       <ReadingProgress />
@@ -232,6 +281,9 @@ function AppContent() {
             <span>📄 {totalPages} páginas</span>
             <span>📝 {wordCount.toLocaleString()} palabras</span>
             <span>⏱ ~{estimatedReadingTime} min</span>
+            {figureCount > 0 && <span>🖼 {figureCount} figuras</span>}
+            {tableCount > 0 && <span>▦ {tableCount} tablas</span>}
+            {commentCount > 0 && <span>💬 {commentCount} comentarios</span>}
           </div>
 
           <main className="document-container">
@@ -240,6 +292,37 @@ function AppContent() {
                 const paraHighlights = visibleHighlights.filter(
                   (h) => h.paragraphIndex === idx
                 );
+                const shared = {
+                  idx,
+                  para,
+                  highlights: paraHighlights,
+                  searchQuery,
+                  onHighlightClick: setEditingHighlightId,
+                };
+
+                // Each kind of block gets its own element, not a `<p>` wearing a
+                // class: a figure is a <figure>, a table is a <table>, an
+                // author's comment is an <aside> with a <cite>. That is what
+                // survives being copied out, read aloud, or printed.
+                if (para.type === 'figure') {
+                  return (
+                    <DocFigure
+                      key={idx}
+                      {...shared}
+                      style={captionStyles}
+                      onOpen={setLightboxFigure}
+                    />
+                  );
+                }
+
+                if (para.type === 'table') {
+                  return <DocTable key={idx} idx={idx} para={para} style={tableStyles} />;
+                }
+
+                if (para.type === 'annotation') {
+                  return <DocComment key={idx} {...shared} style={captionStyles} />;
+                }
+
                 const style =
                   para.type === 'heading'
                     ? headingStyles
@@ -247,21 +330,21 @@ function AppContent() {
                       ? subheadingStyles
                       : para.type === 'subheading2'
                         ? subheading2Styles
-                        : para.aside || para.type === 'table'
-                          ? asideStyles
-                          : para.type === 'verse'
-                            ? verseStyles
-                            : readingStyles;
+                        : para.type === 'caption'
+                          ? captionStyles
+                          : para.type === 'note'
+                            ? noteStyles
+                            : para.aside
+                              ? asideStyles
+                              : para.type === 'verse'
+                                ? verseStyles
+                                : readingStyles;
 
                 return (
                   <Paragraph
                     key={idx}
-                    idx={idx}
-                    para={para}
-                    highlights={paraHighlights}
-                    searchQuery={searchQuery}
+                    {...shared}
                     isSearchActive={false}
-                    onHighlightClick={setEditingHighlightId}
                     style={style}
                   />
                 );
@@ -277,6 +360,11 @@ function AppContent() {
             onToggleSettings={() => togglePanel('settings')}
           />
         </>
+      )}
+
+      {/* Full-screen figure viewer */}
+      {lightboxFigure && (
+        <ImageLightbox figure={lightboxFigure} onClose={() => setLightboxFigure(null)} />
       )}
 
       {/* Highlight color menu */}

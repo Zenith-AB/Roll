@@ -1,6 +1,40 @@
 import { memo, useMemo } from 'react';
 
-const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, isSearchActive, onHighlightClick, style }) {
+// Every block keeps the tag that says what it *is*, not just how it looks: a
+// screen reader announces a heading as a heading and a note as a note, the
+// browser's own find-in-page and reader modes understand the document, and
+// copying a section out of it keeps its structure.
+const TAG_BY_TYPE = {
+  heading: 'h2',
+  subheading: 'h3',
+  subheading2: 'h4',
+  note: 'aside',
+  caption: 'p',
+  annotation: 'p',
+};
+
+const CLASS_BY_TYPE = {
+  heading: 'doc-heading',
+  subheading: 'doc-subheading',
+  subheading2: 'doc-subheading2',
+  verse: 'doc-verse',
+  table: 'doc-table',
+  caption: 'doc-caption',
+  note: 'doc-note',
+  annotation: 'doc-comment-body',
+};
+
+const Paragraph = memo(function Paragraph({
+  idx,
+  para,
+  highlights,
+  searchQuery,
+  isSearchActive,
+  onHighlightClick,
+  style,
+  tag,
+  extraClass,
+}) {
   const text = para.text;
 
   const segments = useMemo(() => {
@@ -31,22 +65,19 @@ const Paragraph = memo(function Paragraph({ idx, para, highlights, searchQuery, 
 
   const isSearchMatch = searchQuery && text.toLowerCase().includes(searchQuery.toLowerCase());
 
-  const Tag =
-    para.type === 'heading'
-      ? 'h2'
-      : para.type === 'subheading'
-        ? 'h3'
-        : para.type === 'subheading2'
-          ? 'h4'
-          : 'p';
+  // Justification needs a full measure to look like anything. A block only a
+  // line or two long — a title, an author's name, an affiliation — comes out
+  // with rivers of white between its words instead, so those stay ragged-right
+  // whatever the reader's alignment setting says.
+  const isShort = text.length < 120;
+
+  const Tag = tag || TAG_BY_TYPE[para.type] || 'p';
 
   const classNames = [
     'doc-paragraph',
-    para.type === 'heading' ? 'doc-heading' : '',
-    para.type === 'subheading' ? 'doc-subheading' : '',
-    para.type === 'subheading2' ? 'doc-subheading2' : '',
-    para.type === 'verse' ? 'doc-verse' : '',
-    para.type === 'table' ? 'doc-table' : '',
+    CLASS_BY_TYPE[para.type] || '',
+    extraClass || '',
+    isShort ? 'doc-paragraph--short' : '',
     para.aside ? 'doc-aside' : '',
     isSearchMatch ? 'search-match' : '',
     isSearchActive ? 'search-active' : '',
