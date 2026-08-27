@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "pdfjs-dist": "^6.2.108",
@@ -19,6 +21,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "oxlint": "^1.75.0",
+    "pdf-lib": "^1.17.1",
     "vite": "^8.2.0"
   }
 }
