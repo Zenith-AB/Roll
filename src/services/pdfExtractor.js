@@ -4,6 +4,8 @@
 // immediately and no PDF could ever be read. The legacy bundle ships the
 // polyfill in both the main thread and the worker.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { extractGraphics } from './pdfGraphics.js';
+import { orderPageRegions } from './pdfLayout.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
@@ -32,47 +34,78 @@ if (
   };
 }
 
-export async function loadPdfFromFile(file) {
+export async function loadPdfFromFile(file, onProgress) {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  return extractDocument(pdf);
+  const base = import.meta.env?.BASE_URL || '/';
+
+  const pdf = await pdfjsLib.getDocument({
+    data: arrayBuffer,
+    // Figures are re-rendered through pdf.js rather than lifted out as raw
+    // bitmaps, so the font and CMap resources now genuinely matter: without
+    // them a chart's axis labels come out as blank boxes, and a CJK document
+    // loses its text entirely.
+    cMapUrl: `${base}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${base}standard_fonts/`,
+  }).promise;
+
+  try {
+    return await extractDocument(pdf, onProgress);
+  } finally {
+    // Tear the worker down once the document has been converted: everything we
+    // need is now plain objects and blob URLs, and on a phone holding the
+    // parsed PDF as well is what pushes the tab over the memory limit.
+    //
+    // The document proxy itself has no destroy() in pdf.js 6 — only the
+    // loading task can shut the worker down, and calling the wrong one fails
+    // silently and leaves the whole parsed PDF resident.
+    try {
+      if (pdf.loadingTask?.destroy) await pdf.loadingTask.destroy();
+      else await pdf.cleanup();
+    } catch {
+      /* the document is already gone; nothing to release */
+    }
+  }
 }
 
-export async function extractDocument(pdf) {
-  const items = await collectTextItems(pdf);
-  if (!items.length) return [];
+export async function extractDocument(pdf, onProgress) {
+  const { items, pageText } = await collectTextItems(pdf, onProgress);
 
-  // Two passes: a naive line grouping (no columns) is needed to *verify* a
-  // candidate gutter before trusting it, otherwise a false positive slices
-  // ordinary prose lines in half and scatters their right-hand halves.
-  const naiveLines = groupIntoLines(items, new Map());
-  if (!naiveLines.length) return [];
-  const gutterByPage = validateGutters(computeGutters(items), naiveLines);
+  // The body size is measured from the raw runs, before anything else, because
+  // every layout threshold downstream is a multiple of it.
+  const modalFontSize = bodyFontSize(items);
+  const ordered = buildOrderedLines(items, modalFontSize, pageText);
+  const lines = stripPageFurniture(ordered, pageText);
 
-  const rawLines = groupIntoLines(items, gutterByPage);
-  if (!rawLines.length) return [];
-
-  const ordered = assignReadingOrder(rawLines);
-  const lines = stripPageFurniture(ordered);
-  if (!lines.length) return [];
-
-  const modalFontSize = mode(lines.map((l) => l.fontSize), 10) || 12;
   const modalLineGap = findModalLineGap(lines);
   const edges = {
-    primary: bodyEdges(lines.filter((l) => !l.aside), modalFontSize),
-    aside: bodyEdges(lines.filter((l) => l.aside), modalFontSize),
+    primary: buildEdgeModel(lines.filter((l) => !l.aside), modalFontSize),
+    aside: buildEdgeModel(lines.filter((l) => l.aside), modalFontSize),
   };
 
   // The main text is built as ONE continuous stream across every page, so a
   // paragraph split by a page break is rejoined instead of being cut in two.
   // Asides are built separately (they are self-contained boxes) and slotted
   // back in at the page where they appeared.
-  const ctx = { modalFontSize, modalLineGap, edges };
+  const ctx = { modalFontSize, modalLineGap, edges, pageText };
   const primaryBlocks = buildBlocks(lines.filter((l) => !l.aside), ctx, true);
   const asideBlocks = buildBlocks(lines.filter((l) => l.aside), ctx, false);
 
-  const blocks = dropNoiseBlocks(interleaveByPage(primaryBlocks, asideBlocks));
-  return coalesceFragments(demoteTableRows(blocks));
+  // Figures and author comments are read from the *drawing* side of the PDF,
+  // which the text pipeline above cannot see at all. It is done after the text
+  // so a failure here still leaves a readable document.
+  let figures = [];
+  let annotations = [];
+  try {
+    ({ figures, annotations } = await extractGraphics(pdf, { pageText, onProgress }));
+  } catch (err) {
+    console.warn('No se pudieron extraer las figuras del PDF:', err);
+  }
+
+  const flow = attachFigureCaptions(dropBlocksInsideFigures(primaryBlocks, figures), figures);
+  const blocks = orderBlocks(flow, asideBlocks, figures, annotations);
+  const cleaned = attachTableCaptions(dropNoiseBlocks(demoteTableRows(blocks)));
+  return mergeSplitTables(coalesceAsides(cleaned));
 }
 
 // Table rows get styled like headings in many papers ("Procedimental 18 8 26"),
@@ -80,49 +113,48 @@ export async function extractDocument(pdf) {
 // bare numbers in a short line is a data row, not a section title.
 function demoteTableRows(blocks) {
   return blocks.map((b) => {
-    if (b.type === 'paragraph' || b.type === 'verse') return b;
+    if (!HEADING_TYPES.has(b.type)) return b;
     if (detectNumberedHeading(b.text)) return b; // "3.2.1. Título" is genuine
     const numbers = b.text.match(/\d+/g) || [];
     return numbers.length >= 2 ? { ...b, type: 'paragraph' } : b;
   });
 }
 
-const FRAGMENT_MAX_CHARS = 70;
-
-// Table cells arrive as a long run of tiny blocks. Rendered one-per-block they
-// became a cascade of little cards that buried the text. Collapse each run into
-// a single block so a table reads as one unit on a phone.
-function coalesceFragments(blocks) {
+// Sidebars arrive as a run of separate little blocks — a contact box, a set of
+// keywords, a pull quote — and one card per line buries them. Merging a page's
+// aside blocks into one keeps the box reading as a box.
+//
+// This used to do the same thing to *any* run of three or more short blocks and
+// label the result a table. That was wrong in a way that damaged the most
+// important page of every document: an article's title, its authors and their
+// affiliations are all short lines, so the front matter was boxed up as tabular
+// data, and so was every stretch of prose whose lines happened to be short.
+// Anything that is genuinely a table is found by detectTableAt, which has to
+// agree with itself about columns before it claims one; anything else is prose
+// and now stays prose.
+function coalesceAsides(blocks) {
   const out = [];
   let i = 0;
 
   while (i < blocks.length) {
     const b = blocks[i];
 
-    if (b.aside) {
+    if (b.aside && b.type !== 'table' && b.type !== 'figure') {
       const group = [b];
       let j = i + 1;
-      while (j < blocks.length && blocks[j].aside && blocks[j].page === b.page) {
+      while (
+        j < blocks.length &&
+        blocks[j].aside &&
+        blocks[j].page === b.page &&
+        blocks[j].type !== 'table' &&
+        blocks[j].type !== 'figure'
+      ) {
         group.push(blocks[j]);
         j++;
       }
       out.push({ ...b, text: group.map((g) => g.text).join('\n') });
       i = j;
       continue;
-    }
-
-    if (isFragment(b)) {
-      const group = [b];
-      let j = i + 1;
-      while (j < blocks.length && blocks[j].page === b.page && isFragment(blocks[j])) {
-        group.push(blocks[j]);
-        j++;
-      }
-      if (group.length >= 3) {
-        out.push({ ...b, type: 'table', text: group.map((g) => g.text).join('\n') });
-        i = j;
-        continue;
-      }
     }
 
     out.push(b);
@@ -132,47 +164,181 @@ function coalesceFragments(blocks) {
   return out;
 }
 
-function isFragment(b) {
-  if (b.aside) return false;
-  if (b.type === 'heading' || b.type === 'subheading' || b.type === 'subheading2') return false;
-  if (detectNumberedHeading(b.text)) return false;
-  return b.text.length <= FRAGMENT_MAX_CHARS;
+// A long table does not stop at a page break; the PDF just starts drawing it
+// again on the next page, often reprinting its header row. Left alone that
+// becomes two unrelated tables, the second of them headerless and starting
+// mid-thought — which is exactly how the reader met the twelve-week schedule
+// and the coding scheme in the test documents.
+const MAX_STRAY_BLOCKS_BETWEEN_TABLE_HALVES = 2;
+
+function mergeSplitTables(blocks) {
+  const out = [];
+
+  for (const block of blocks) {
+    // The two halves are not always adjacent: the last row's text sometimes
+    // wraps onto the next page ahead of the rest of the table and arrives as a
+    // stray line of its own. Looking back past a couple of short strays is what
+    // lets the halves find each other; the strays keep their content and are
+    // re-emitted after the table they came from.
+    const anchor = findTableToContinue(out, block);
+    if (anchor < 0) {
+      out.push(block);
+      continue;
+    }
+
+    const previous = out[anchor];
+    const strays = out.splice(anchor + 1);
+    const header = previous.header ? previous.rows[0] : null;
+    const rows = block.rows.filter(
+      (row, index) => !(index === 0 && header && sameRow(row, header))
+    );
+
+    out[anchor] = {
+      ...previous,
+      rows: [...previous.rows, ...rows],
+      text: [previous.text, rows.map((r) => r.filter(Boolean).join(' · ')).join('\n')]
+        .filter(Boolean)
+        .join('\n'),
+    };
+    out.push(...strays);
+  }
+
+  return out;
+}
+
+function findTableToContinue(out, block) {
+  if (block.type !== 'table' || !block.rows?.length) return -1;
+
+  for (let i = out.length - 1, skipped = 0; i >= 0; i--, skipped++) {
+    if (skipped > MAX_STRAY_BLOCKS_BETWEEN_TABLE_HALVES) return -1;
+
+    const candidate = out[i];
+    if (candidate.type === 'table' && candidate.rows?.length) {
+      const continues =
+        candidate.rows[0].length === block.rows[0].length &&
+        block.page === candidate.page + 1 &&
+        candidate.aside === block.aside;
+      return continues ? i : -1;
+    }
+
+    // Only a short leftover may sit between the halves; a real paragraph means
+    // the tables are genuinely separate.
+    const isStray =
+      (candidate.type === 'paragraph' || candidate.type === 'verse') &&
+      candidate.text.length <= 100;
+    if (!isStray) return -1;
+  }
+
+  return -1;
+}
+
+function sameRow(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((cell, i) => cell.trim().toLowerCase() === b[i].trim().toLowerCase());
 }
 
 // Page furniture — a running header/footer reprinted on every page, and bare
 // page numbers — is layout scaffolding, not content. Removing it at the line
 // level (before paragraphs are assembled) is what lets a paragraph flow
 // uninterrupted across a page boundary.
-function stripPageFurniture(lines) {
+function stripPageFurniture(lines, pageText) {
+  // A running head usually carries the page number, so no two pages print it
+  // identically: "206 LENGUAS MODERNAS 61" and "208 LENGUAS MODERNAS 61" are
+  // the same furniture but not the same string. Comparing with the digits
+  // blanked out is what recognises them as one thing — and the margin test
+  // keeps that from eating a real sentence that merely repeats.
+  const skeleton = (text) => text.replace(/\d+/g, '#');
+
   const pagesByText = new Map();
+  const pagesBySkeleton = new Map();
   for (const l of lines) {
     const key = l.text.trim();
     if (!key) continue;
     if (!pagesByText.has(key)) pagesByText.set(key, new Set());
     pagesByText.get(key).add(l.page);
+    const shape = skeleton(key);
+    if (!pagesBySkeleton.has(shape)) pagesBySkeleton.set(shape, new Set());
+    pagesBySkeleton.get(shape).add(l.page);
   }
 
   return lines.filter((l) => {
     const t = l.text.trim();
     if (!t) return false;
     if (/^\d{1,4}$/.test(t)) return false; // standalone page number
-    return (pagesByText.get(t)?.size ?? 0) < 3; // repeated on 3+ pages
+    // "Página 7" changes on every page, so the repeated-text rule below never
+    // catches it and it ends up quoted in the middle of the reading flow.
+    if (/^(p[áa]g(?:ina)?\.?|page|p\.)\s*\d{1,4}$/i.test(t)) return false;
+    if ((pagesByText.get(t)?.size ?? 0) >= 3) return false; // reprinted verbatim
+    if ((pagesBySkeleton.get(skeleton(t))?.size ?? 0) >= 3 && inPageMargin(l, pageText)) {
+      return false;
+    }
+    return true;
   });
 }
 
-function interleaveByPage(primaryBlocks, asideBlocks) {
-  const tagged = [
-    ...primaryBlocks.map((b, i) => ({ b, rank: 0, i })),
-    ...asideBlocks.map((b, i) => ({ b, rank: 1, i })),
-  ];
-  tagged.sort((x, y) => x.b.page - y.b.page || x.rank - y.rank || x.i - y.i);
-  return tagged.map((t) => t.b);
+// Top and bottom strips of the page, where running heads and feet live.
+function inPageMargin(line, pageText) {
+  const view = pageText?.get(line.page)?.view;
+  if (!view) return false;
+  const height = view[3] - view[1];
+  if (height <= 0) return false;
+  const position = (line.y - view[1]) / height;
+  return position > 0.9 || position < 0.08;
+}
+
+// Puts one page's material back in reading order. Figures are floats: they
+// belong above the first block of running text that starts below them, which is
+// where the reader would have met them on paper. Asides and author comments are
+// self-contained boxes and go after the page's prose, since on a phone there is
+// no margin to put them in.
+function orderBlocks(primary, aside, figures, annotations) {
+  const groupByPage = (list) => {
+    const map = new Map();
+    for (const b of list) {
+      if (!map.has(b.page)) map.set(b.page, []);
+      map.get(b.page).push(b);
+    }
+    return map;
+  };
+
+  const flowPages = groupByPage(primary);
+  const asidePages = groupByPage(aside);
+  const figurePages = groupByPage(figures);
+  const commentPages = groupByPage(annotations);
+
+  const pages = new Set();
+  for (const list of [primary, aside, figures, annotations]) {
+    for (const b of list) pages.add(b.page);
+  }
+
+  const out = [];
+  for (const page of [...pages].sort((a, b) => a - b)) {
+    const flow = flowPages.get(page) || [];
+    const floats = [...(figurePages.get(page) || [])].sort((a, b) => b.y - a.y);
+
+    let f = 0;
+    for (const block of flow) {
+      while (f < floats.length && block.y != null && floats[f].y > block.y) {
+        out.push(floats[f++]);
+      }
+      out.push(block);
+    }
+    while (f < floats.length) out.push(floats[f++]);
+
+    out.push(...(asidePages.get(page) || []));
+    out.push(...[...(commentPages.get(page) || [])].sort((a, b) => b.y - a.y));
+  }
+
+  return out;
 }
 
 // Stray table cells and math fragments ("13", "x") survive as one- or
 // zero-letter blocks and just add noise to a reading view.
 function dropNoiseBlocks(blocks) {
-  return blocks.filter((b) => (b.text.match(/\p{L}/gu) || []).length >= 2);
+  return blocks.filter((b) => {
+    if (b.type === 'figure' || b.type === 'table' || b.type === 'annotation') return true;
+    return (b.text.match(/\p{L}/gu) || []).length >= 2;
+  });
 }
 
 // Some embedded PDF fonts map ligature glyphs (ti, tt, fí…) to unrelated
@@ -218,114 +384,102 @@ async function readTextItems(page) {
   return items;
 }
 
-async function collectTextItems(pdf) {
+// Collects every text run, and alongside it the box each run occupies. Those
+// boxes are what later tells a chart apart from a bordered paragraph: a region
+// of the page that is mostly covered by text is not a figure, however many
+// lines are drawn around it.
+async function collectTextItems(pdf, onProgress) {
   const items = [];
+  const pageText = new Map();
+
   for (let i = 1; i <= pdf.numPages; i++) {
+    onProgress?.({ phase: 'text', page: i, total: pdf.numPages });
+
     const page = await pdf.getPage(i);
-    const content = { items: await readTextItems(page) };
-    for (const item of content.items) {
+    const view = Array.isArray(page.view) && page.view.length === 4
+      ? [...page.view]
+      : [0, 0, 612, 792];
+    const boxes = [];
+
+    for (const item of await readTextItems(page)) {
       if (!item.str || !item.str.trim()) continue;
+      const fontSize = Math.hypot(item.transform[0], item.transform[1]);
+      const x = item.transform[4];
+      const y = item.transform[5];
+      const width = item.width ?? 0;
+
       items.push({
         str: repairLigatures(item.str),
-        x: item.transform[4],
-        y: item.transform[5],
-        width: item.width ?? 0,
-        fontSize: Math.hypot(item.transform[0], item.transform[1]),
+        x,
+        y,
+        width,
+        fontSize,
+        font: item.fontName || '',
         page: i,
       });
+      boxes.push([x, y - fontSize * 0.25, x + width, y + fontSize * 0.9]);
     }
+
+    pageText.set(i, { view, boxes });
   }
-  return items;
+
+  return { items, pageText };
 }
 
-// Finds, per page, the x position of a real column gutter — a wide gap in
-// the page's raw item positions with a healthy population of text on each
-// side. Working from raw items (not yet-grouped lines) gives a much denser
-// sample of "what x ranges have text on them", so even a tight marginalia
-// gutter (a sidebar box sitting snug against the main column) shows up as
-// a real gap rather than being lost in per-line noise.
-function computeGutters(items) {
+// Body text size, measured from the raw runs and weighted by how much text
+// each run carries, so a page of large headings cannot outvote the prose.
+function bodyFontSize(items) {
+  const counts = new Map();
+  for (const it of items) {
+    const key = Math.round(it.fontSize * 10) / 10;
+    counts.set(key, (counts.get(key) || 0) + it.str.length);
+  }
+  let best = 12;
+  let bestWeight = 0;
+  counts.forEach((weight, key) => {
+    if (weight > bestWeight) {
+      bestWeight = weight;
+      best = key;
+    }
+  });
+  return best || 12;
+}
+
+// Runs the layout analysis page by page and flattens the result into one
+// document-order list of lines. Reading order is settled here and never
+// revisited: everything downstream can treat `lines` as the text of the
+// document, in the order a person would read it.
+function buildOrderedLines(items, modalFontSize, pageText) {
   const byPage = new Map();
   for (const it of items) {
     if (!byPage.has(it.page)) byPage.set(it.page, []);
     byPage.get(it.page).push(it);
   }
-  const gutters = new Map();
-  byPage.forEach((pageItems, page) => gutters.set(page, findGutterX(pageItems)));
-  return gutters;
-}
 
-// A real column gutter is a vertical corridor that no text crosses. On a
-// normal prose page the widest x-gap between items is just an accident of
-// word spacing, and treating it as a gutter chops every line in two and
-// exiles the right-hand halves — text appears to vanish mid-sentence. So a
-// candidate is only trusted when almost no line spans it and both sides
-// hold a real block of text.
-function validateGutters(candidates, naiveLines) {
-  const byPage = new Map();
-  for (const l of naiveLines) {
-    if (!byPage.has(l.page)) byPage.set(l.page, []);
-    byPage.get(l.page).push(l);
-  }
-
-  const validated = new Map();
-  candidates.forEach((gutterX, page) => {
-    if (gutterX == null) return;
-    const pageLines = byPage.get(page) || [];
-    if (pageLines.length < 6) return;
-
-    const tol = 2;
-    let crossing = 0;
-    let left = 0;
-    let right = 0;
-    for (const l of pageLines) {
-      if (l.xLeft < gutterX - tol && l.xRight > gutterX + tol) crossing++;
-      else if (l.xRight <= gutterX + tol) left++;
-      else right++;
-    }
-
-    if (crossing / pageLines.length > 0.1) return; // text spans it: not a gutter
-    if (left < 4 || right < 4) return; // one side is too thin to be a column
-    validated.set(page, gutterX);
-  });
-
-  return validated;
-}
-
-function findGutterX(pageItems) {
-  const MIN_ITEMS = 20;
-  const MIN_CLUSTER = 6;
-  const MIN_GUTTER = 18;
-
-  if (pageItems.length < MIN_ITEMS) return null;
-
-  const sorted = [...pageItems].sort((a, b) => a.x - b.x);
-  let bestIdx = -1;
-  let bestGap = 0;
-  for (let i = MIN_CLUSTER; i < sorted.length - MIN_CLUSTER; i++) {
-    const gap = sorted[i].x - sorted[i - 1].x;
-    if (gap > bestGap) {
-      bestGap = gap;
-      bestIdx = i;
+  const lines = [];
+  for (const page of [...byPage.keys()].sort((a, b) => a - b)) {
+    const view = pageText?.get(page)?.view;
+    for (const region of orderPageRegions(byPage.get(page), modalFontSize, view)) {
+      for (const line of groupIntoLines(region.items)) {
+        line.aside = region.aside;
+        // The region's own margins, not the page's: an indented first line and
+        // a line that runs to the margin are both judged against the column
+        // the line actually lives in.
+        line.regionLeft = region.rect[0];
+        line.regionRight = region.rect[2];
+        lines.push(line);
+      }
     }
   }
-
-  if (bestIdx === -1 || bestGap < MIN_GUTTER) return null;
-
-  const gutterX = (sorted[bestIdx - 1].x + sorted[bestIdx].x) / 2;
-  const leftCount = sorted.filter((it) => it.x < gutterX).length;
-  if (leftCount < MIN_CLUSTER || sorted.length - leftCount < MIN_CLUSTER) return null;
-
-  return gutterX;
+  return lines;
 }
 
-// Groups raw text-run items into visual lines (items sharing a baseline).
-// A known page gutter forces a line break exactly at that boundary, so a
-// sidebar line ending right where the main column starts never fuses with
-// whatever happens to sit at the same height in the main column.
-function groupIntoLines(items, gutterByPage) {
+// Groups a region's text runs into visual lines (runs sharing a baseline).
+// The region is already a single column, so there is no gutter to respect and
+// no risk of fusing a sidebar line with whatever sits at the same height in the
+// main text.
+function groupIntoLines(items) {
   const sorted = [...items].sort((a, b) => {
-    if (a.page !== b.page) return a.page - b.page;
     const yDiff = b.y - a.y;
     if (Math.abs(yDiff) > 5) return yDiff;
     return a.x - b.x;
@@ -335,20 +489,12 @@ function groupIntoLines(items, gutterByPage) {
   let current = null;
 
   for (const item of sorted) {
-    const gutterX = gutterByPage.get(item.page) ?? null;
-    const side = gutterX == null ? 0 : item.x < gutterX ? 0 : 1;
-
-    const sameLine =
-      current &&
-      current.page === item.page &&
-      current.side === side &&
-      Math.abs(item.y - current.y) <= item.fontSize * 0.4;
-
+    const sameLine = current && Math.abs(item.y - current.y) <= item.fontSize * 0.4;
     if (sameLine) {
       current.items.push(item);
     } else {
       if (current) lines.push(finalizeLine(current));
-      current = { items: [item], page: item.page, y: item.y, side };
+      current = { items: [item], page: item.page, y: item.y };
     }
   }
   if (current) lines.push(finalizeLine(current));
@@ -358,6 +504,7 @@ function groupIntoLines(items, gutterByPage) {
 function finalizeLine(line) {
   const items = line.items;
   const fontSize = Math.round((items[0]?.fontSize || 0) * 10) / 10;
+  const font = items[0]?.font || '';
   const text = items
     .map((it) => it.str)
     .join(' ')
@@ -367,60 +514,431 @@ function finalizeLine(line) {
   return {
     text,
     fontSize,
+    font,
+    // The same line split at its wide internal gaps. On prose this is always a
+    // single cell; two or more is the raw signal a table is built from.
+    cells: splitCells(items, fontSize),
     // Reduce rather than spread: a pathological PDF can put thousands of runs
     // on one baseline, and Math.min(...huge) blows the call stack.
     xLeft: items.reduce((m, it) => Math.min(m, it.x), Infinity),
     xRight: items.reduce((m, it) => Math.max(m, it.x + it.width), -Infinity),
     y: line.y,
     page: line.page,
-    side: line.side,
     itemCount: items.length,
   };
 }
 
-// A plain top-to-bottom sort corrupts any page with a sidebar or a second
-// column, because their lines share a y-range with the main column and get
-// interleaved with it. This reads one whole column before the other,
-// instead of weaving them together by height — and picks the narrower
-// column as the "aside", since a sidebar/footnote box is narrower than the
-// main text column regardless of which physical side of the page it's on.
-function assignReadingOrder(lines) {
-  const byPage = new Map();
-  for (const line of lines) {
-    if (!byPage.has(line.page)) byPage.set(line.page, []);
-    byPage.get(line.page).push(line);
+// ── Tables ──────────────────────────────────────────────────────────────────
+
+// A gap has to be much wider than word spacing to mean "new cell". Justified
+// prose stretches its spaces, so the threshold is set above anything word
+// spacing plausibly produces — roughly one and a third characters of blank.
+function splitCells(items, fontSize) {
+  const sorted = [...items].sort((a, b) => a.x - b.x);
+  const minGap = Math.max(fontSize * 1.35, 7);
+
+  const cells = [];
+  let current = null;
+
+  for (const it of sorted) {
+    const text = it.str.trim();
+    if (!text) continue;
+    const end = it.x + (it.width || 0);
+
+    if (current && it.x - current.xEnd < minGap) {
+      current.parts.push(text);
+      current.xEnd = Math.max(current.xEnd, end);
+    } else {
+      if (current) cells.push(current);
+      current = { x: it.x, xEnd: end, parts: [text] };
+    }
   }
+  if (current) cells.push(current);
 
-  const ordered = [];
-  const pages = [...byPage.keys()].sort((a, b) => a - b);
+  return cells
+    .map((c) => ({
+      x: c.x,
+      xEnd: c.xEnd,
+      text: c.parts.join(' ').replace(/\s+/g, ' ').trim(),
+    }))
+    .filter((c) => c.text);
+}
 
-  for (const page of pages) {
-    const pageLines = byPage.get(page);
-    const sideA = pageLines.filter((l) => l.side === 0).sort((a, b) => b.y - a.y);
-    const sideB = pageLines.filter((l) => l.side === 1).sort((a, b) => b.y - a.y);
+const TABLE_MIN_ROWS = 3;
+const TABLE_MAX_COLUMNS = 14;
 
-    if (!sideB.length) {
-      sideA.forEach((l) => ordered.push({ ...l, aside: false }));
+// Columns are found by clustering every cell's left edge across the whole
+// candidate block. Alignment down the block is the thing that separates a real
+// table from prose that happened to break with a wide gap: a stray gap lands
+// somewhere different on every line, a column lands in the same place on all
+// of them.
+function clusterColumns(rows, fontSize) {
+  const tolerance = Math.max(fontSize * 1.6, 9);
+  const points = [];
+  rows.forEach((row, r) => row.cells.forEach((c) => points.push({ x: c.x, row: r })));
+  if (!points.length) return [];
+  points.sort((a, b) => a.x - b.x);
+
+  const clusters = [];
+  let current = null;
+  for (const p of points) {
+    if (current && p.x - current.last <= tolerance) {
+      current.sum += p.x;
+      current.n++;
+      current.last = p.x;
+      current.rows.add(p.row);
+    } else {
+      if (current) clusters.push(current);
+      current = { sum: p.x, n: 1, last: p.x, rows: new Set([p.row]) };
+    }
+  }
+  if (current) clusters.push(current);
+
+  return clusters
+    .filter((c) => c.rows.size >= 2) // a column that appears once is a stray gap
+    .map((c) => ({ x: c.sum / c.n }))
+    .sort((a, b) => a.x - b.x);
+}
+
+// Many tables mark an empty cell with a dash, a bullet or a row of dots rather
+// than leaving it blank. Carried through literally those become "- -" values
+// that say nothing, and on a phone each one costs a labelled line of its own.
+const PLACEHOLDER_CELL = /^[\s\-–—_.·•*]+$/;
+
+function normalizeCell(text) {
+  return PLACEHOLDER_CELL.test(text) ? '' : text;
+}
+
+function toGrid(rows, columns) {
+  return rows.map((row) => {
+    const cells = new Array(columns.length).fill('');
+    for (const cell of row.cells) {
+      let best = 0;
+      let bestDistance = Infinity;
+      for (let i = 0; i < columns.length; i++) {
+        const distance = Math.abs(columns[i].x - cell.x);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = i;
+        }
+      }
+      cells[best] = cells[best] ? `${cells[best]} ${cell.text}` : cell.text;
+    }
+    return cells.map(normalizeCell);
+  });
+}
+
+const NUMERIC_CELL = /^[\d\s.,%()+\-–—/$€:]+$/;
+
+// A cell whose text is longer than its column is wide wraps onto further
+// baselines, and each of those baselines looks like another row. The giveaway
+// is that the continuation has nothing in the first column: a real new row
+// starts by naming itself. Folding them back is the difference between a table
+// that reads as sentences in cells and one shredded into fragments.
+function mergeWrappedRows(grid) {
+  const out = [];
+
+  for (const row of grid) {
+    const previous = out[out.length - 1];
+    const isContinuation = previous && !row[0] && previous[0] && row.some(Boolean);
+
+    if (isContinuation) {
+      for (let c = 0; c < row.length; c++) {
+        if (!row[c]) continue;
+        previous[c] = previous[c] ? `${previous[c]} ${row[c]}` : row[c];
+      }
       continue;
     }
 
-    const widthA = median(sideA.map((l) => l.xRight - l.xLeft));
-    const widthB = median(sideB.map((l) => l.xRight - l.xLeft));
-    const [primary, secondary] = widthA >= widthB ? [sideA, sideB] : [sideB, sideA];
-
-    primary.forEach((l) => ordered.push({ ...l, aside: false }));
-    secondary.forEach((l) => ordered.push({ ...l, aside: true }));
+    out.push([...row]);
   }
 
-  return ordered;
+  return out;
 }
 
-function median(values) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+// A header row names the columns instead of holding data. Three independent
+// tells, because documents disagree about which one they use: it is set in a
+// larger face than the body; it is all words where the body holds figures; or
+// its cells are all short labels above cells that are not.
+function looksLikeHeaderRow(grid, headerLine, bodyLine) {
+  if (grid.length < 2) return false;
+  const first = grid[0].filter(Boolean);
+  if (first.length < 2) return false;
+  if (first.some((cell) => NUMERIC_CELL.test(cell))) return false;
+
+  const headerFontSize = headerLine?.fontSize;
+  const bodyFontSize = bodyLine?.fontSize;
+  if (headerFontSize != null && bodyFontSize != null && headerFontSize > bodyFontSize + 0.4) {
+    return true;
+  }
+
+  // Same size, different face: the overwhelmingly common way a header row is
+  // set apart, and invisible to a size comparison.
+  if (headerLine?.font && bodyLine?.font && headerLine.font !== bodyLine.font) {
+    return true;
+  }
+
+  if (grid.slice(1).some((row) => row.some((cell) => cell && NUMERIC_CELL.test(cell)))) {
+    return true;
+  }
+
+  const labelsAreShort = first.every((cell) => cell.length <= 34);
+  const bodyIsLonger = grid.slice(1).some((row) => row.some((cell) => cell.length > 34));
+  return labelsAreShort && bodyIsLonger;
 }
+
+/**
+ * Tries to read a real table starting at `lines[start]`.
+ *
+ * Returns null far more often than not, and that is the point: a false positive
+ * shreds a paragraph into a grid of nonsense, which is much worse than a table
+ * that stays plain text. Hence three independent agreements are required —
+ * enough rows, columns that line up, and a column count that repeats.
+ */
+function detectTableAt(lines, start, ctx, cache) {
+  const cached = cache?.get(start);
+  if (cached !== undefined) return cached;
+  const result = detectTable(lines, start, ctx);
+  cache?.set(start, result);
+  return result;
+}
+
+function detectTable(lines, start, ctx) {
+  const first = lines[start];
+  if (!first?.cells || first.cells.length < 2) return null;
+
+  const rows = [];
+  const leftEdge = first.cells[0].x;
+  const columnTolerance = Math.max(first.fontSize * 1.6, 9);
+  let i = start;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.text) {
+      i++;
+      continue;
+    }
+    if (line.page !== first.page) break;
+    if (detectNumberedHeading(line.text)) break;
+    // The first row is allowed to be styled like a heading — that is exactly
+    // what a bold column-header row looks like to the font-size test.
+    if (rows.length && isHeadingLine(line, ctx.modalFontSize)) break;
+
+    if (line.cells.length < 2) {
+      // One cell on a baseline is normally prose. Inside a table it is the
+      // tail of a wrapped cell whose neighbours happened to fit on one line —
+      // and refusing it here truncated real tables to two rows and threw the
+      // rest back into the prose. What distinguishes the two is where it
+      // starts: prose returns to the left margin, a wrapped cell stays out in
+      // its own column.
+      if (!rows.length) break;
+      if (Math.abs(line.cells[0].x - leftEdge) <= columnTolerance) break;
+    }
+
+    // Size consistency is measured against the *body* rows, so a larger header
+    // row does not end the table at its second line.
+    const sizeRef = rows.length >= 2 ? rows[1].fontSize : null;
+    if (sizeRef != null && Math.abs(line.fontSize - sizeRef) > 1.2) break;
+
+    if (rows.length) {
+      const previous = rows[rows.length - 1];
+      const gap = previous.y - line.y;
+      const gapRef = ctx.modalLineGap || first.fontSize * 1.2;
+      if (gap <= 0 || gap > gapRef * 3) break; // a blank band ends the table
+    }
+
+    rows.push(line);
+    i++;
+  }
+
+  if (rows.length < TABLE_MIN_ROWS) return null;
+
+  const columns = clusterColumns(rows, first.fontSize);
+  if (columns.length < 2 || columns.length > TABLE_MAX_COLUMNS) return null;
+
+  // Wrapped cells are folded back *before* the grid is judged. Measured on the
+  // raw baselines the same table looks ragged — a four-row table whose cells
+  // wrap has rows of three, two, one and two cells — and the consistency test
+  // below then throws away exactly the dense, interesting tables it should be
+  // keeping.
+  const grid = mergeWrappedRows(toGrid(rows, columns));
+
+  // Folding the continuations back can reveal that what looked like a table was
+  // really one wrapped line, which is not a table at all. Two rows are only
+  // convincing when there are at least three columns to line up.
+  if (grid.length < 2) return null;
+  if (grid.length < 3 && columns.length < 3) return null;
+
+  const populated = grid.filter((row) => row.filter(Boolean).length >= 2).length;
+  if (populated / grid.length < 0.7) return null;
+
+  const counts = grid.map((row) => row.filter(Boolean).length);
+  const modalCount = mode(counts, 1);
+  if (modalCount < 2) return null;
+  if (counts.filter((c) => c === modalCount).length / counts.length < 0.6) return null;
+
+  const header = looksLikeHeaderRow(grid, rows[0], rows[1]);
+
+  return {
+    end: i,
+    block: {
+      type: 'table',
+      rows: grid,
+      header,
+      caption: null,
+      page: first.page,
+      aside: first.aside,
+      y: first.y,
+      fontSize: first.fontSize,
+      xLeft: rows.reduce((m, l) => Math.min(m, l.xLeft), Infinity),
+      xRight: rows.reduce((m, l) => Math.max(m, l.xRight), -Infinity),
+      // A flat text form is kept alongside the grid so search, the word count
+      // and text selection keep working on tables exactly as on prose.
+      text: grid.map((row) => row.filter(Boolean).join(' · ')).join('\n'),
+    },
+  };
+}
+
+// ── Captions and footnotes ──────────────────────────────────────────────────
+
+const CAPTION_RE =
+  /^\s*(fig(?:ura|\.)?|tabla|cuadro|gr[áa]fic[oa]|imagen|ilustraci[óo]n|foto(?:graf[íi]a)?|esquema|mapa|anexo|l[áa]mina|diagrama|table|figure|chart|plate)\s*\.?\s*(\d{1,3}|[ivxlc]{1,6})?\s*[.:)–—-]?\s+\S/i;
+
+const CAPTION_MAX_CHARS = 400;
+
+function detectCaption(text) {
+  return text.length <= CAPTION_MAX_CHARS && CAPTION_RE.test(text);
+}
+
+// Footnotes and editor's notes are set smaller than the body and sit at the
+// foot of the page. Both signals are needed: small type in the middle of a page
+// is a table cell or a caption, and body-size type at the bottom is just the
+// last paragraph.
+function detectFootnote(run, ctx) {
+  const line = run[0];
+  if (line.fontSize > ctx.modalFontSize * 0.9) return false;
+
+  const view = ctx.pageText?.get(line.page)?.view;
+  if (!view) return false;
+  const height = view[3] - view[1];
+  if (height <= 0) return false;
+
+  return (line.y - view[1]) / height < 0.26;
+}
+
+const HEADING_TYPES = new Set(['heading', 'subheading', 'subheading2']);
+
+// A chart carries its own axis labels, legend and value callouts *inside* the
+// picture. Those same runs also reach the text pipeline, where they arrive as
+// meaningless little tables and stanzas of percentages sitting next to a figure
+// that already shows them. Anything short enough to be a label and sitting
+// inside a figure's box has therefore already been delivered to the reader.
+const LABEL_MAX_CHARS = 200;
+
+function dropBlocksInsideFigures(blocks, figures) {
+  if (!figures.length) return blocks;
+
+  const byPage = new Map();
+  for (const figure of figures) {
+    if (!figure.rect) continue;
+    if (!byPage.has(figure.page)) byPage.set(figure.page, []);
+    byPage.get(figure.page).push(figure);
+  }
+  if (!byPage.size) return blocks;
+
+  return blocks.filter((block) => {
+    if (block.type === 'figure' || block.type === 'annotation') return true;
+    if (block.y == null || !Number.isFinite(block.xLeft)) return true;
+    // A chart's axis ticks and legend add up to a lot of characters between
+    // them, so the length limit only guards prose — a "table" or a stanza of
+    // labels sitting inside a figure is the figure's own lettering however
+    // long it is.
+    const isLabelShaped = block.type === 'table' || block.type === 'verse';
+    if (!isLabelShaped && block.text.length > LABEL_MAX_CHARS) return true;
+
+    const centre = (block.xLeft + block.xRight) / 2;
+    const covering = byPage.get(block.page) || [];
+    return !covering.some(
+      ({ rect }) =>
+        block.y >= rect[1] &&
+        block.y <= rect[3] &&
+        centre >= rect[0] &&
+        centre <= rect[2]
+    );
+  });
+}
+
+// A caption names the figure it sits under (or, for tables, above it). Pairing
+// them up here is what lets the caption be rendered as a real `<figcaption>`
+// belonging to the picture, instead of an orphan sentence floating in the text.
+function attachFigureCaptions(blocks, figures) {
+  if (!figures.length) return blocks;
+
+  const candidatesByPage = new Map();
+  blocks.forEach((block, index) => {
+    if (block.type !== 'caption') return;
+    if (!candidatesByPage.has(block.page)) candidatesByPage.set(block.page, []);
+    candidatesByPage.get(block.page).push(index);
+  });
+
+  const used = new Set();
+
+  for (const figure of figures) {
+    const candidates = candidatesByPage.get(figure.page) || [];
+    let bestIndex = -1;
+    let bestDistance = Infinity;
+
+    for (const index of candidates) {
+      if (used.has(index)) continue;
+      const block = blocks[index];
+      if (block.y == null) continue;
+
+      const distance =
+        block.y <= figure.yBottom ? figure.yBottom - block.y : block.y - figure.y;
+      if (distance < 0 || distance > 90) continue;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex >= 0) {
+      figure.caption = blocks[bestIndex].text;
+      figure.text = blocks[bestIndex].text;
+      used.add(bestIndex);
+    }
+  }
+
+  return blocks.filter((_, index) => !used.has(index));
+}
+
+// The same pairing for tables, done on the final flow: a table's caption is
+// whichever caption block ended up immediately next to it.
+function attachTableCaptions(blocks) {
+  const consumed = new Set();
+
+  const result = blocks.map((block, index) => {
+    if (block.type !== 'table' || block.caption) return block;
+
+    const before = blocks[index - 1];
+    if (before?.type === 'caption' && before.page === block.page && !consumed.has(index - 1)) {
+      consumed.add(index - 1);
+      return { ...block, caption: before.text };
+    }
+
+    const after = blocks[index + 1];
+    if (after?.type === 'caption' && after.page === block.page && !consumed.has(index + 1)) {
+      consumed.add(index + 1);
+      return { ...block, caption: after.text };
+    }
+
+    return block;
+  });
+
+  return result.filter((_, index) => !consumed.has(index));
+}
+
+// ── Layout metrics ──────────────────────────────────────────────────────────
 
 function mode(values, precision = 1) {
   const counts = new Map();
@@ -455,26 +973,83 @@ function findModalLineGap(lines) {
   return gaps.length ? mode(gaps, 2) : null;
 }
 
-// Typical left/right extent of a region's body-text lines, used to detect
-// indentation (new paragraph) and full-width lines (a wrapped line vs. an
-// intentional break). Computed separately for the main text and the aside
-// so a narrow sidebar doesn't skew the main column's margins, or vice versa.
-function bodyEdges(lines, modalFontSize) {
-  return {
-    left: findEdge(lines, modalFontSize, (l) => l.xLeft, 1),
-    right: findEdge(lines, modalFontSize, (l) => l.xRight, 1, 0.75),
+// Where a column's body text starts and ends. Indentation (a new paragraph)
+// and running to the margin (a wrapped line rather than a deliberate break)
+// are both judged against these, so getting them wrong scrambles paragraphs.
+//
+// A document can have more than one measure — two columns, a wide abstract over
+// a narrow body, an indented block quote — so the left edges are clustered and
+// each line is later matched to the one it actually belongs to. A single global
+// pair, which is what this used to be, silently mis-judged every line that did
+// not live in the dominant column.
+function buildEdgeModel(lines, modalFontSize) {
+  const body = lines.filter((l) => Math.abs(l.fontSize - modalFontSize) <= 0.5);
+  const global = {
+    left: body.length ? mode(body.map((l) => l.xLeft), 1) : null,
+    right: body.length ? percentile(body.map((l) => l.xRight), 0.75) : null,
   };
+  if (body.length < 12) return { global, clusters: [], tolerance: modalFontSize * 4 };
+
+  const tolerance = modalFontSize * 2.5;
+  const sorted = [...body].sort((a, b) => a.xLeft - b.xLeft);
+  const groups = [];
+  let current = null;
+
+  for (const line of sorted) {
+    if (current && line.xLeft - current.last <= tolerance) {
+      current.lines.push(line);
+      current.last = line.xLeft;
+    } else {
+      if (current) groups.push(current);
+      current = { lines: [line], last: line.xLeft };
+    }
+  }
+  if (current) groups.push(current);
+
+  const clusters = groups
+    .filter((g) => g.lines.length >= 8)
+    .map((g) => ({
+      left: mode(g.lines.map((l) => l.xLeft), 1),
+      right: percentile(g.lines.map((l) => l.xRight), 0.75),
+    }))
+    .sort((a, b) => a.left - b.left);
+
+  return { global, clusters, tolerance: modalFontSize * 4 };
 }
 
-function findEdge(lines, modalFontSize, accessor, precision, percentile = 0.5) {
-  const values = lines
-    .filter((l) => Math.abs(l.fontSize - modalFontSize) <= 0.5)
-    .map(accessor);
+// The measure a given line belongs to. A line's own region is the best answer
+// when the layout analysis found one; otherwise fall back to the nearest
+// measured column, and to the document-wide one if nothing is close.
+function edgeFor(line, model) {
+  if (!model) return {};
+  if (line.regionLeft != null && line.regionRight != null) {
+    const width = line.regionRight - line.regionLeft;
+    // A region that is only as wide as the line itself tells us nothing about
+    // where the margin is; that happens when a band contains a single short
+    // line. Only trust a region wide enough to hold a real measure.
+    if (width > model.tolerance * 2) {
+      return { left: line.regionLeft, right: line.regionRight };
+    }
+  }
+
+  let best = null;
+  let bestDistance = Infinity;
+  for (const cluster of model.clusters) {
+    const distance = Math.abs(cluster.left - line.xLeft);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = cluster;
+    }
+  }
+  if (best && bestDistance <= model.tolerance) return best;
+  return model.global;
+}
+
+function percentile(values, fraction) {
   if (!values.length) return null;
-  if (percentile === 0.5) return mode(values, precision);
   const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * percentile));
-  return sorted[idx];
+  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * fraction));
+  return sorted[index];
 }
 
 // A bare number or punctuation fragment (a stray table cell value, a page
@@ -486,7 +1061,11 @@ function looksLikeHeadingText(text) {
 function isHeadingLine(line, modalFontSize) {
   return (
     line.fontSize > modalFontSize * 1.18 &&
-    line.itemCount <= 12 &&
+    // Measured in characters, not in text runs: a document's own title is set
+    // large and often arrives as thirty separate runs, and counting runs threw
+    // it out of the outline for being "too complex" to be a heading.
+    line.text.length <= 160 &&
+    line.itemCount <= 40 &&
     looksLikeHeadingText(line.text)
   );
 }
@@ -512,12 +1091,27 @@ function detectNumberedHeading(text) {
 function buildBlocks(lines, ctx, allowCrossPage) {
   const { modalFontSize, modalLineGap, edges } = ctx;
   const blocks = [];
+  // Each line is probed for a table twice — once as a possible start, once by
+  // the paragraph loop looking ahead — and the probe scans forward from there.
+  // Remembering the answer keeps that from turning quadratic on a document that
+  // is mostly two-column lines.
+  const tableCache = new Map();
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i];
     if (!line.text) {
       i++;
+      continue;
+    }
+
+    // Tables are checked first, and only ever claim a run of lines that agrees
+    // with itself on columns — see detectTableAt. Anything it declines falls
+    // through to the ordinary paragraph machinery untouched.
+    const table = detectTableAt(lines, i, ctx, tableCache);
+    if (table) {
+      blocks.push(table.block);
+      i = table.end;
       continue;
     }
 
@@ -529,7 +1123,7 @@ function buildBlocks(lines, ctx, allowCrossPage) {
       // paragraph that follows a heading is never swallowed.
       const parts = [line];
       let k = i + 1;
-      const headEdge = (line.aside ? edges.aside : edges.primary) || {};
+      const headEdge = edgeFor(line, line.aside ? edges.aside : edges.primary);
       while (k < lines.length) {
         const nx = lines[k];
         if (!nx.text) { k++; continue; }
@@ -556,6 +1150,10 @@ function buildBlocks(lines, ctx, allowCrossPage) {
         type: rejoined ? rejoined.type : 'heading',
         page: line.page,
         aside: line.aside,
+        y: line.y,
+        fontSize: line.fontSize,
+        xLeft: Math.min(...parts.map((p) => p.xLeft)),
+        xRight: Math.max(...parts.map((p) => p.xRight)),
       });
       i = k;
       continue;
@@ -572,11 +1170,15 @@ function buildBlocks(lines, ctx, allowCrossPage) {
         continue;
       }
       if (isHeadingLine(next, modalFontSize) || detectNumberedHeading(next.text)) break;
+      // Stop before a table rather than absorbing its header row into the
+      // paragraph above it — the table would then start at its second row and
+      // lose the line that names its columns.
+      if (next.cells.length >= 2 && detectTableAt(lines, j, ctx, tableCache)) break;
 
       const prev = run[run.length - 1];
       if (Math.abs(prev.fontSize - next.fontSize) > 0.5) break;
 
-      const bodyEdge = (next.aside ? edges.aside : edges.primary) || {};
+      const bodyEdge = edgeFor(next, next.aside ? edges.aside : edges.primary);
       const isIndented =
         bodyEdge.left != null && next.xLeft > bodyEdge.left + next.fontSize * 0.6;
       if (isIndented) break; // new paragraph start, no blank line needed
@@ -627,11 +1229,23 @@ function buildBlocks(lines, ctx, allowCrossPage) {
     // filled the outline with fragments. Subheadings come from section
     // numbering or a larger font, both handled above.
     if (text) {
+      let type = isVerse ? 'verse' : 'paragraph';
+      // Both of these keep their own tag downstream (`<figcaption>` once paired
+      // with its figure, `<aside>` for a note), which is the whole point of
+      // recognising them: the reader can tell a caption from the prose, and a
+      // screen reader announces it as one.
+      if (run.length <= 4 && detectCaption(text)) type = 'caption';
+      else if (detectFootnote(run, ctx)) type = 'note';
+
       blocks.push({
         text,
-        type: isVerse ? 'verse' : 'paragraph',
+        type,
         page: run[0].page,
         aside: run[0].aside,
+        y: run[0].y,
+        fontSize: run[0].fontSize,
+        xLeft: run.reduce((m, l) => Math.min(m, l.xLeft), Infinity),
+        xRight: run.reduce((m, l) => Math.max(m, l.xRight), -Infinity),
       });
     }
 
