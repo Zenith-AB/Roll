@@ -1,16 +1,40 @@
-# React + Vite
+# Rollo
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Convierte un PDF en un documento web para leer: texto reflowable, subrayados,
+notas y buscador. Funciona en Android, iPhone y escritorio, sin servidor — el
+PDF nunca sale del dispositivo.
 
-Currently, two official plugins are available:
+```bash
+npm install
+npm run dev      # http://localhost:5173/Roll/
+npm test         # pruebas del extractor y del anclaje de subrayados
+npm run check    # lint + pruebas + build
+```
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Cómo está hecho
 
-## React Compiler
+Un PDF no guarda párrafos, columnas, tablas ni figuras: guarda operaciones de
+dibujo y trozos de texto con coordenadas. Reconstruir el documento a partir de
+eso es casi todo el programa, y vive en `src/services`:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| archivo | qué reconstruye |
+| --- | --- |
+| `pdfLayout.js` | El **orden de lectura**, con un XY-cut recursivo: bandas horizontales primero (para despegar un título del cuerpo), columnas después. Distingue el corredor entre columnas del hueco entre celdas de una tabla. |
+| `pdfExtractor.js` | **Párrafos** (reuniendo líneas partidas, incluso entre páginas), **encabezados**, **tablas** (columnas por alineación, celdas que se parten en varias líneas, tablas que siguen en la página siguiente), **pies de figura** y **notas al pie**. |
+| `pdfGraphics.js` | **Figuras**, re-dibujando con pdf.js las zonas de la página que se pintan en vez de componerse — así aparecen también los gráficos vectoriales, no solo las imágenes incrustadas — y los **comentarios de autor** guardados en las anotaciones del PDF. |
 
-## Expanding the Oxlint configuration
+Cada bloque conserva su etiqueta real (`<figure>`, `<table>`, `<aside>`,
+`<figcaption>`, `h2`–`h4`), de modo que el documento sigue teniendo estructura
+al copiarlo, imprimirlo o leerlo con un lector de pantalla.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+## Notas de plataforma
+
+- Se usa el build **legacy** de pdf.js a propósito: el normal llama a
+  `Promise.withResolvers()` sin polyfill y eso rompe Safari anterior a iOS 17.4.
+- El texto se extrae leyendo el stream a mano, porque Safari no implementa
+  `ReadableStream[Symbol.asyncIterator]`.
+- Las figuras se rasterizan en un canvas del tamaño de la figura, con topes de
+  memoria distintos para móvil y escritorio; los canvas se liberan poniendo su
+  tamaño a cero, que es lo único que devuelve la memoria en iOS.
+- Una tabla ancha se muestra como fichas en pantallas estrechas, sin dejar de
+  ser un `<table>` en el DOM.
