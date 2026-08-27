@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { useDocument } from './DocumentContext';
+import { describeSelection, reanchorHighlights } from '../utils/anchoring';
 
 const HighlightsContext = createContext(null);
 
@@ -24,8 +25,11 @@ export function HighlightsProvider({ children }) {
       const stored = localStorage.getItem(key);
       if (stored) {
         const parsed = JSON.parse(stored);
-        setHighlights(parsed);
-        idCounter.current = parsed.reduce((max, h) => Math.max(max, h.id), 0);
+        // Every improvement to the extractor moves the block indices these were
+        // saved against, so they are re-found by their text before being shown.
+        const anchored = reanchorHighlights(parsed, docContent);
+        setHighlights(anchored);
+        idCounter.current = anchored.reduce((max, h) => Math.max(max, h.id), 0);
       } else {
         setHighlights([]);
         idCounter.current = 0;
@@ -45,20 +49,27 @@ export function HighlightsProvider({ children }) {
     } catch { /* ignore */ }
   }, [highlights, fileName, docContent]);
 
-  const addHighlight = useCallback(({ paragraphIndex, startOffset, endOffset, colorObj }) => {
-    setHighlights((prev) => [
-      ...prev,
-      {
-        id: ++idCounter.current,
-        paragraphIndex,
-        startOffset,
-        endOffset,
-        colorObj,
-        note: '',
-        createdAt: Date.now(),
-      },
-    ]);
-  }, []);
+  const addHighlight = useCallback(
+    ({ paragraphIndex, startOffset, endOffset, colorObj }) => {
+      const text = docContent?.[paragraphIndex]?.text || '';
+      setHighlights((prev) => [
+        ...prev,
+        {
+          id: ++idCounter.current,
+          paragraphIndex,
+          startOffset,
+          endOffset,
+          // What the mark was actually placed on, so it can be found again if
+          // the block indices ever change under it.
+          ...describeSelection(text, startOffset, endOffset),
+          colorObj,
+          note: '',
+          createdAt: Date.now(),
+        },
+      ]);
+    },
+    [docContent]
+  );
 
   const deleteHighlight = useCallback((id) => {
     setHighlights((prev) => prev.filter((h) => h.id !== id));
@@ -72,12 +83,19 @@ export function HighlightsProvider({ children }) {
     setHighlights((prev) => prev.map((h) => (h.id === id ? { ...h, colorObj } : h)));
   }, []);
 
-  const highlightsWithNotes = highlights.filter((h) => h.note);
+  const highlightsWithNotes = highlights.filter((h) => h.note && !h.orphan);
+
+  // Drawn marks only: an orphan is still stored, waiting for its sentence to
+  // come back, but it has no place on screen.
+  const anchoredHighlights = highlights.filter((h) => !h.orphan);
+  const orphanCount = highlights.length - anchoredHighlights.length;
 
   return (
     <HighlightsContext.Provider
       value={{
-        highlights,
+        highlights: anchoredHighlights,
+        allHighlights: highlights,
+        orphanCount,
         addHighlight,
         deleteHighlight,
         updateNote,
